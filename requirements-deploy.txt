@@ -1,0 +1,29 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# AI/ML Dependencies
+torch>=2.6.0
+torchvision>=0.21.0
+transformers>=4.40.0
+accelerate>=0.30.0
+pillow>=10.1.0
+numpy>=1.24.0
+
+# API and HTTP
+httpx>=0.25.0
+requests>=2.31.0
+
+# Data Processing
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+
+# Image Processing
+opencv-python-headless>=4.8.0
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# Production server
+gunicorn>=21.2.0

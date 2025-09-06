@@ -1,0 +1,3 @@
+# Railway deployment configuration
+PORT=8002
+DEBUG=False
