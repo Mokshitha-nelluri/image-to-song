@@ -1,1 +1,1 @@
-web: uvicorn main_spotify:app --host 0.0.0.0 --port $PORT
+web: uvicorn main_oauth_test:app --host 0.0.0.0 --port $PORT
