@@ -1,3 +1,5 @@
-# Railway deployment configuration
-PORT=8002
-DEBUG=False
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "uvicorn main_spotify:app --host 0.0.0.0 --port $PORT"
