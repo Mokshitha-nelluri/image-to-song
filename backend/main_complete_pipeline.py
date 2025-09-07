@@ -604,6 +604,16 @@ async def get_mixed_recommendations(request: Dict[str, str]):
             print("📱 Using anonymous fallback recommendations...")
             results["mood_based"] = get_anonymous_recommendations(mood)
             results["discovery"] = [{"name": f"Discover {mood.title()} Music", "artist": "Mood Radio", "preview": None}]
+            results["summary"] = {
+                "total_recommendations": len(results["mood_based"]) + len(results["discovery"]),
+                "breakdown": {
+                    "personalized": 0,
+                    "mood_based": len(results["mood_based"]),
+                    "discovery": len(results["discovery"])
+                }
+            }
+            print(f"📊 Anonymous recommendations ready: {results}")
+            return results
             
         async with httpx.AsyncClient() as client:
             headers = {'Authorization': f'Bearer {user_token}'} if user_token else {}
