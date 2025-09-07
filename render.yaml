@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: image-to-song-complete
+    name: image-to-song-v2
     env: python
     repo: https://github.com/Mokshitha-nelluri/image-to-song.git
     buildCommand: pip install -r requirements.txt
