@@ -39,12 +39,15 @@ class _SpotifyAuthScreenState extends State<SpotifyAuthScreen> {
           ..setNavigationDelegate(
             NavigationDelegate(
               onPageStarted: (String url) {
+                print('WebView navigating to: $url');
                 setState(() {
                   _isLoading = true;
                 });
 
                 // Check if we've been redirected back to our callback
-                if (url.contains('/spotify/callback')) {
+                if (url.contains('/spotify/callback') ||
+                    url.contains('code=')) {
+                  print('Detected callback URL: $url');
                   _handleCallback(url);
                 }
               },
@@ -81,13 +84,25 @@ class _SpotifyAuthScreenState extends State<SpotifyAuthScreen> {
   }
 
   void _handleCallback(String url) {
+    print('Handling callback: $url');
+
     // Check if the URL contains a successful callback
-    if (url.contains('code=') || url.contains('?code=')) {
+    if (url.contains('code=') ||
+        url.contains('?code=') ||
+        url.contains('&code=')) {
+      print('Authentication successful - closing WebView');
       // Authentication successful
       Navigator.pop(context, true); // Return success
     } else if (url.contains('error=')) {
+      print('Authentication failed - closing WebView');
       // Authentication failed
       Navigator.pop(context, false); // Return failure
+    }
+    // Also close if we see the main page with success parameters
+    else if (url.contains('/?') &&
+        (url.contains('code=') || url.contains('state='))) {
+      print('Detected success redirect - closing WebView');
+      Navigator.pop(context, true);
     }
   }
 

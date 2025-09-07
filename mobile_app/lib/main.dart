@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:url_launcher/url_launcher.dart';
@@ -132,18 +133,72 @@ class _HomePageState extends State<HomePage> {
     _addDebugInfo('Starting image analysis...');
 
     try {
+      // Validate file exists and can be read
+      if (!await _selectedImage!.exists()) {
+        throw Exception('Selected image file does not exist');
+      }
+
+      final fileSize = await _selectedImage!.length();
+      _addDebugInfo('File size: $fileSize bytes');
+
+      if (fileSize == 0) {
+        throw Exception('Selected image file is empty');
+      }
+
+      if (fileSize > 10 * 1024 * 1024) {
+        // 10MB limit
+        throw Exception('Image file is too large (${fileSize} bytes)');
+      }
+
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('${Config.baseUrl}/analyze-image'),
       );
 
       _addDebugInfo('Adding file to request: ${_selectedImage!.path}');
+
+      // Get file size and validate
+      final fileBytes = await _selectedImage!.readAsBytes();
+      _addDebugInfo('File read: ${fileBytes.length} bytes');
+
+      // Check file signature
+      String fileSignature = '';
+      if (fileBytes.length >= 4) {
+        fileSignature = fileBytes
+            .take(4)
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join(' ');
+      }
+      _addDebugInfo('File signature: $fileSignature');
+
       request.files.add(
-        await http.MultipartFile.fromPath('file', _selectedImage!.path),
+        http.MultipartFile.fromBytes(
+          'file',
+          fileBytes,
+          filename: 'mobile_image.jpg',
+          contentType: MediaType('image', 'jpeg'),
+        ),
       );
 
+      // Add explicit headers
+      request.headers['Accept'] = 'application/json';
+      request.headers['User-Agent'] = 'Flutter Mobile App';
+      request.headers['Connection'] = 'keep-alive';
+
+      _addDebugInfo('Request headers: ${request.headers}');
+      _addDebugInfo('Request fields: ${request.fields}');
+      _addDebugInfo('Request files: ${request.files.length}');
+      _addDebugInfo('File content type: ${request.files.first.contentType}');
+      _addDebugInfo('File field name: ${request.files.first.field}');
+
       _addDebugInfo('Sending request to: ${Config.baseUrl}/analyze-image');
-      final response = await request.send();
+      final response = await request.send().timeout(
+        const Duration(seconds: 60),
+        onTimeout: () {
+          _addDebugInfo('Request timed out after 60 seconds');
+          throw Exception('Request timed out');
+        },
+      );
       final responseData = await response.stream.bytesToString();
 
       _addDebugInfo('Response status: ${response.statusCode}');
@@ -165,8 +220,22 @@ class _HomePageState extends State<HomePage> {
         }
       } else {
         _addDebugInfo('Analysis failed with status: ${response.statusCode}');
+        _addDebugInfo('Response headers: ${response.headers}');
+        _addDebugInfo('Response reason: ${response.reasonPhrase}');
+
+        // Try to parse error details from response
+        String errorDetail = 'Unknown error';
+        try {
+          final errorJson = json.decode(responseData);
+          errorDetail =
+              errorJson['detail'] ?? errorJson['message'] ?? responseData;
+        } catch (parseError) {
+          errorDetail = responseData.isEmpty ? 'Empty response' : responseData;
+        }
+
+        _addDebugInfo('Error detail: $errorDetail');
         throw Exception(
-          'Analysis failed: ${response.statusCode} - $responseData',
+          'Analysis failed: ${response.statusCode} - $errorDetail',
         );
       }
     } catch (e) {
@@ -185,6 +254,9 @@ class _HomePageState extends State<HomePage> {
     _addDebugInfo('Getting recommendations for mood: $mood, caption: $caption');
 
     try {
+      // First check if we have Spotify token available
+      _addDebugInfo('Checking Spotify authentication status...');
+      
       final response = await http.post(
         Uri.parse('${Config.baseUrl}/mixed-recommendations'),
         headers: {'Content-Type': 'application/json'},
@@ -238,6 +310,9 @@ class _HomePageState extends State<HomePage> {
           );
         }
 
+        // Check backend token status
+        await _checkSpotifyTokenStatus();
+        
         // Refresh backend connection to update auth status
         await _checkBackendConnection();
       } else {
@@ -256,6 +331,29 @@ class _HomePageState extends State<HomePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Spotify authorization failed: $e')),
       );
+    }
+  }
+
+  Future<void> _checkSpotifyTokenStatus() async {
+    _addDebugInfo('Checking Spotify token status...');
+    
+    try {
+      final response = await http.get(
+        Uri.parse('${Config.baseUrl}/spotify/status'),
+      );
+      
+      _addDebugInfo('Token status response: ${response.statusCode}');
+      _addDebugInfo('Token status data: ${response.body}');
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final hasToken = data['has_token'] ?? false;
+        final userCount = data['user_count'] ?? 0;
+        
+        _addDebugInfo('Has valid token: $hasToken, Users with tokens: $userCount');
+      }
+    } catch (e) {
+      _addDebugInfo('Token status check error: $e');
     }
   }
 
