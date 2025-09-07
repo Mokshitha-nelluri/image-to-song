@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
     
+    # Development vs Production Mode
+    DEVELOPMENT_MODE: bool = os.getenv("DEVELOPMENT_MODE", "False").lower() == "true"
+    FAST_LOCAL_MODEL: bool = os.getenv("FAST_LOCAL_MODEL", "False").lower() == "true"
+    
     # API Configuration
     API_V1_PREFIX: str = "/api/v1"
     HOST: str = os.getenv("HOST", "0.0.0.0")
@@ -23,7 +27,10 @@ class Settings(BaseSettings):
     
     # AI Model Configuration
     MODEL_CACHE_DIR: str = os.getenv("MODEL_CACHE_DIR", "./models")
+    # Production model (high quality, slower)
     BLIP2_MODEL_NAME: str = "Salesforce/blip2-flan-t5-xl"
+    # Development model (faster startup, good enough quality)
+    BLIP2_DEV_MODEL_NAME: str = "Salesforce/blip2-opt-2.7b"
     USE_GPU: bool = os.getenv("USE_GPU", "True").lower() == "true"
     MAX_BATCH_SIZE: int = int(os.getenv("MAX_BATCH_SIZE", "4"))
     

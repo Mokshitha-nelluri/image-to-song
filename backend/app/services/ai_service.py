@@ -93,9 +93,19 @@ class BLIP2Service:
     def _load_model_sync(self) -> None:
         """Synchronous model loading with memory optimizations."""
         try:
+            # Choose model based on environment
+            if settings.DEVELOPMENT_MODE and settings.FAST_LOCAL_MODEL:
+                model_name = settings.BLIP2_DEV_MODEL_NAME  # Faster for development
+                logger.info("🔧 DEVELOPMENT MODE: Using fast local model for quicker startup")
+            else:
+                model_name = settings.BLIP2_MODEL_NAME  # Production quality
+                logger.info("🚀 PRODUCTION MODE: Using high-quality model")
+            
+            logger.info(f"Loading model: {model_name}")
+            
             # Load processor first (lightweight)
             self.processor = Blip2Processor.from_pretrained(
-                settings.BLIP2_MODEL_NAME,
+                model_name,
                 cache_dir=settings.MODEL_CACHE_DIR
             )
             
@@ -106,15 +116,25 @@ class BLIP2Service:
                 "torch_dtype": torch.float16 if self.device.type == "cuda" else torch.float32,
             }
             
-            # Add GPU-specific optimizations
+            # Add device-specific optimizations
             if self.device.type == "cuda":
                 model_kwargs.update({
                     "device_map": "auto",
                     "load_in_8bit": True,  # Quantization for memory efficiency
                 })
+            elif self.device.type == "cpu":
+                # CPU-specific optimizations for faster startup
+                model_kwargs.update({
+                    "device_map": "cpu",
+                    "use_safetensors": True,
+                    "offload_state_dict": True,  # Memory optimization
+                })
+                # Limit CPU threads for better performance
+                torch.set_num_threads(min(4, torch.get_num_threads()))
+                logger.info(f"Set CPU threads to: {torch.get_num_threads()}")
             
             self.model = Blip2ForConditionalGeneration.from_pretrained(
-                settings.BLIP2_MODEL_NAME,
+                model_name,
                 **model_kwargs
             )
             
@@ -137,6 +157,11 @@ class BLIP2Service:
     
     async def _warm_up_model(self) -> None:
         """Warm up the model with a dummy image to ensure consistent performance."""
+        # Skip warm-up on CPU for faster startup
+        if self.device.type == "cpu":
+            logger.info("Skipping model warm-up on CPU for faster startup")
+            return
+            
         logger.info("Warming up BLIP-2 model...")
         
         try:
