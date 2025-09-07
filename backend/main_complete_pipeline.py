@@ -499,6 +499,24 @@ async def exchange_code_for_token(authorization_code: str):
         else:
             raise HTTPException(status_code=response.status_code, detail=f"Token exchange failed: {response.text}")
 
+@app.get("/spotify/status")
+async def spotify_status():
+    """Check Spotify authentication status"""
+    
+    valid_tokens = 0
+    has_token = False
+    
+    for token_data in user_tokens.values():
+        if 'access_token' in token_data:
+            valid_tokens += 1
+            has_token = True
+    
+    return {
+        "has_token": has_token,
+        "user_count": valid_tokens,
+        "total_users": len(user_tokens)
+    }
+
 # New Pipeline Endpoints
 
 @app.post("/analyze-image")
