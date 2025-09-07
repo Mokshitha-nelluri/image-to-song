@@ -334,7 +334,8 @@ async def health_check():
             "oauth": "✅ Ready",
             "ai_analysis": "✅ Color-based analyzer",
             "recommendations": "✅ Mixed strategy"
-        }
+        },
+        "user_authenticated": len(user_tokens) > 0  # Add this to track actual user auth
     }
 
 # OAuth endpoints (same as before)
@@ -373,10 +374,32 @@ async def spotify_callback(
     """Handle Spotify OAuth callback"""
     
     if error:
-        raise HTTPException(status_code=400, detail=f"Spotify authorization failed: {error}")
+        # Redirect to mobile app with error
+        return HTMLResponse(f"""
+        <html>
+        <body>
+        <h2>❌ Authorization Failed</h2>
+        <p>Error: {error}</p>
+        <p>You can close this window and try again in the app.</p>
+        <script>
+        setTimeout(() => window.close(), 3000);
+        </script>
+        </body>
+        </html>
+        """)
     
     if state not in auth_sessions:
-        raise HTTPException(status_code=400, detail="Invalid state parameter")
+        return HTMLResponse("""
+        <html>
+        <body>
+        <h2>❌ Invalid Session</h2>
+        <p>Session expired or invalid. Please try again.</p>
+        <script>
+        setTimeout(() => window.close(), 3000);
+        </script>
+        </body>
+        </html>
+        """)
     
     try:
         token_data = await exchange_code_for_token(code)
@@ -389,14 +412,34 @@ async def spotify_callback(
                 'expires_in': token_data.get('expires_in')
             }
             
-            # Redirect back to main interface with success
-            return RedirectResponse(url=f"/?code={code}&state={state}")
+            # Return success page that closes automatically
+            return HTMLResponse("""
+            <html>
+            <body>
+            <h2>✅ Authorization Successful!</h2>
+            <p>You can now close this window and return to the app.</p>
+            <script>
+            setTimeout(() => window.close(), 2000);
+            </script>
+            </body>
+            </html>
+            """)
             
         else:
             raise HTTPException(status_code=400, detail="Failed to get access token")
             
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Token exchange failed: {str(e)}")
+        return HTMLResponse(f"""
+        <html>
+        <body>
+        <h2>❌ Token Exchange Failed</h2>
+        <p>Error: {str(e)}</p>
+        <script>
+        setTimeout(() => window.close(), 3000);
+        </script>
+        </body>
+        </html>
+        """)
 
 async def exchange_code_for_token(authorization_code: str):
     """Exchange authorization code for access token"""
@@ -428,15 +471,38 @@ async def analyze_image(file: UploadFile = File(...)):
     """Analyze uploaded image and extract mood"""
     
     try:
-        # Validate file type
-        if not file.content_type.startswith('image/'):
+        print(f"Received file: {file.filename}, content_type: {file.content_type}")
+        
+        # Read image data first
+        image_data = await file.read()
+        print(f"Read {len(image_data)} bytes of image data")
+        
+        # Try to detect if it's an image by reading the file signature
+        is_image = False
+        if image_data.startswith(b'\xff\xd8\xff'):  # JPEG
+            is_image = True
+            print("Detected JPEG image")
+        elif image_data.startswith(b'\x89PNG\r\n\x1a\n'):  # PNG
+            is_image = True
+            print("Detected PNG image")
+        elif image_data.startswith(b'GIF87a') or image_data.startswith(b'GIF89a'):  # GIF
+            is_image = True
+            print("Detected GIF image")
+        elif image_data.startswith(b'RIFF') and b'WEBP' in image_data[:12]:  # WebP
+            is_image = True
+            print("Detected WebP image")
+        elif file.content_type and file.content_type.startswith('image/'):
+            is_image = True
+            print(f"Detected image by content type: {file.content_type}")
+        
+        if not is_image:
+            print(f"Not an image - content_type: {file.content_type}, first 20 bytes: {image_data[:20]}")
             raise HTTPException(status_code=400, detail="File must be an image")
         
-        # Read image data
-        image_data = await file.read()
-        
         # Analyze image
+        print("Starting image analysis...")
         analysis_result = image_analyzer.analyze_image(image_data)
+        print(f"Analysis result: {analysis_result}")
         
         return {
             "status": "success",
@@ -445,7 +511,13 @@ async def analyze_image(file: UploadFile = File(...)):
             **analysis_result
         }
         
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
+        print(f"Image analysis exception: {str(e)}")
+        print(f"Exception type: {type(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
 
 @app.post("/mixed-recommendations")
@@ -599,4 +671,7 @@ def get_mood_audio_features(mood: str) -> Dict[str, float]:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8002))
+    print(f"🚀 Starting Image-to-Song Backend on port {port}")
+    print(f"📊 Spotify OAuth: {bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET)}")
+    print(f"🔗 Redirect URI: {SPOTIFY_REDIRECT_URI}")
     uvicorn.run(app, host="0.0.0.0", port=port)

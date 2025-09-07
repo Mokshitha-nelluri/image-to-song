@@ -1,16 +1,16 @@
 services:
   - type: web
-    name: image-to-song-final
+    name: image-to-song-backend
     env: python
     repo: https://github.com/Mokshitha-nelluri/image-to-song.git
-    rootDir: .
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app_server:app --host 0.0.0.0 --port $PORT
+    startCommand: python main_complete_pipeline.py
     plan: free
     envVars:
       - key: SPOTIFY_CLIENT_ID
-        sync: false
+        value: 25de944a1992453896769027a9ffe3c1
       - key: SPOTIFY_CLIENT_SECRET
-        sync: false
+        sync: false  # You'll need to set this in Render dashboard
       - key: SPOTIFY_REDIRECT_URI
-        sync: false
+        value: https://image-to-song-backend.onrender.com/spotify/callback
