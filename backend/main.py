@@ -407,14 +407,36 @@ async def spotify_callback(
             }
             
             # Return success page that closes automatically
-            return HTMLResponse("""
+            return HTMLResponse(f"""
             <html>
-            <body>
-            <h2>✅ Authorization Successful!</h2>
-            <p>You can now close this window and return to the app.</p>
-            <script>
-            setTimeout(() => window.close(), 2000);
-            </script>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Spotify Connected!</title>
+            </head>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background: linear-gradient(135deg, #1DB954, #1ed760);">
+                <div style="background: white; border-radius: 15px; padding: 30px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto;">
+                    <h2 style="color: #1DB954; margin-bottom: 20px;">✅ Spotify Connected!</h2>
+                    <p style="color: #333; margin-bottom: 20px;">Your account has been successfully linked.</p>
+                    <p style="color: #666; font-size: 14px;">Session ID: <code>{state}</code></p>
+                    <p style="color: #666; font-size: 14px;">You can now close this window and return to the app.</p>
+                    <div style="margin-top: 20px;">
+                        <button onclick="window.close()" style="background: #1DB954; color: white; border: none; padding: 10px 20px; border-radius: 25px; cursor: pointer;">Close Window</button>
+                    </div>
+                </div>
+                <script>
+                    // Auto-close after 3 seconds
+                    setTimeout(() => {{
+                        window.close();
+                    }}, 3000);
+                    
+                    // Try to communicate with mobile app (if WebView supports it)
+                    if (window.ReactNativeWebView) {{
+                        window.ReactNativeWebView.postMessage(JSON.stringify({{
+                            type: 'SPOTIFY_AUTH_SUCCESS',
+                            state: '{state}'
+                        }}));
+                    }}
+                </script>
             </body>
             </html>
             """)
@@ -457,6 +479,43 @@ async def exchange_code_for_token(authorization_code: str):
             return response.json()
         else:
             raise HTTPException(status_code=response.status_code, detail=f"Token exchange failed: {response.text}")
+
+@app.get("/spotify/token/{state}")
+async def get_spotify_token(state: str):
+    """Get stored Spotify token for mobile app"""
+    if state not in user_tokens:
+        raise HTTPException(status_code=404, detail="Token not found or session expired")
+    
+    token_data = user_tokens[state]
+    return {
+        "access_token": token_data["access_token"],
+        "refresh_token": token_data.get("refresh_token"),
+        "expires_in": token_data.get("expires_in"),
+        "token_type": "Bearer"
+    }
+
+@app.post("/spotify/validate-token")
+async def validate_token(token: str):
+    """Validate a Spotify access token"""
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient() as client:
+            response = await client.get("https://api.spotify.com/v1/me", headers=headers)
+            
+        if response.status_code == 200:
+            user_data = response.json()
+            return {
+                "valid": True,
+                "user": {
+                    "id": user_data.get("id"),
+                    "display_name": user_data.get("display_name"),
+                    "email": user_data.get("email")
+                }
+            }
+        else:
+            return {"valid": False, "error": "Token invalid or expired"}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
 
 @app.get("/spotify/status")
 async def spotify_status():
