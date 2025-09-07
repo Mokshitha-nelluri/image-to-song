@@ -602,7 +602,11 @@ async def get_mixed_recommendations(request: Dict[str, str]):
         # If no token, provide fallback recommendations
         if not user_token:
             print("📱 Using anonymous fallback recommendations...")
-            results["mood_based"] = get_anonymous_recommendations(mood)
+            anon_tracks = get_anonymous_recommendations(mood)
+            print(f"🎵 Anonymous tracks returned: {anon_tracks}")
+            print(f"📊 Number of tracks: {len(anon_tracks) if anon_tracks else 0}")
+            
+            results["mood_based"] = anon_tracks
             results["discovery"] = [{"name": f"Discover {mood.title()} Music", "artist": "Mood Radio", "preview": None}]
             results["summary"] = {
                 "total_recommendations": len(results["mood_based"]) + len(results["discovery"]),
@@ -612,7 +616,7 @@ async def get_mixed_recommendations(request: Dict[str, str]):
                     "discovery": len(results["discovery"])
                 }
             }
-            print(f"📊 Anonymous recommendations ready: {results}")
+            print(f"📊 Final anonymous results: {results}")
             return results
             
         async with httpx.AsyncClient() as client:
@@ -744,6 +748,8 @@ def get_mood_audio_features(mood: str) -> Dict[str, float]:
 def get_anonymous_recommendations(mood: str):
     """Get fallback recommendations when user is not authenticated"""
     
+    print(f"🔍 Getting anonymous recommendations for mood: {mood}")
+    
     mood_recommendations = {
         "happy": [
             {"name": "Happy", "artist": "Pharrell Williams", "preview": None, "external_url": "https://open.spotify.com/track/60nZcImufyMA1MKQY3dcCH"},
@@ -768,7 +774,9 @@ def get_anonymous_recommendations(mood: str):
     }
     
     # Return mood-specific tracks or default to calm
-    return mood_recommendations.get(mood, mood_recommendations.get("calm", []))
+    result = mood_recommendations.get(mood, mood_recommendations.get("calm", []))
+    print(f"📋 Mood '{mood}' mapped to {len(result)} tracks")
+    return result
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8002))
