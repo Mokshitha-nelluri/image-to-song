@@ -579,19 +579,32 @@ async def get_mixed_recommendations(request: Dict[str, str]):
     try:
         # Get user token (in production, get from user session)
         user_token = None
-        for token_data in user_tokens.values():
+        print(f"🔍 DEBUG: Checking {len(user_tokens)} stored token sessions...")
+        
+        for state_id, token_data in user_tokens.items():
+            print(f"🔑 Token session {state_id}: {list(token_data.keys())}")
             if 'access_token' in token_data:
                 user_token = token_data['access_token']
+                print(f"✅ Found token: {user_token[:20]}..." if user_token else "❌ Empty token")
                 break
+        
+        print(f"🎵 Final token status: {'✅ Authenticated' if user_token else '❌ Anonymous mode'}")
         
         results = {
             "mood": mood,
             "caption": caption,
             "personalized": [],
             "mood_based": [],
-            "discovery": []
+            "discovery": [],
+            "mode": "authenticated" if user_token else "anonymous"
         }
         
+        # If no token, provide fallback recommendations
+        if not user_token:
+            print("📱 Using anonymous fallback recommendations...")
+            results["mood_based"] = get_anonymous_recommendations(mood)
+            results["discovery"] = [{"name": f"Discover {mood.title()} Music", "artist": "Mood Radio", "preview": None}]
+            
         async with httpx.AsyncClient() as client:
             headers = {'Authorization': f'Bearer {user_token}'} if user_token else {}
             
@@ -717,6 +730,35 @@ def get_mood_audio_features(mood: str) -> Dict[str, float]:
     }
     
     return mood_features.get(mood, {"target_valence": 0.5, "target_energy": 0.5})
+
+def get_anonymous_recommendations(mood: str):
+    """Get fallback recommendations when user is not authenticated"""
+    
+    mood_recommendations = {
+        "happy": [
+            {"name": "Happy", "artist": "Pharrell Williams", "preview": None, "external_url": "https://open.spotify.com/track/60nZcImufyMA1MKQY3dcCH"},
+            {"name": "Good as Hell", "artist": "Lizzo", "preview": None, "external_url": "https://open.spotify.com/track/1LLXZFeAHK9R4xUramtUKw"},
+            {"name": "Can't Stop the Feeling!", "artist": "Justin Timberlake", "preview": None, "external_url": "https://open.spotify.com/track/4bHsxqR3GMrXTxEPLuK5ue"}
+        ],
+        "melancholic": [
+            {"name": "The Night We Met", "artist": "Lord Huron", "preview": None, "external_url": "https://open.spotify.com/track/0NdTUS4UiNYCNn5FgVqKQY"},
+            {"name": "Skinny Love", "artist": "Bon Iver", "preview": None, "external_url": "https://open.spotify.com/track/2Ek2iSEoDv7IwKxhWXNShN"},
+            {"name": "Mad World", "artist": "Gary Jules", "preview": None, "external_url": "https://open.spotify.com/track/3JOVTQ5h8HGFnDdp4VT3MP"}
+        ],
+        "energetic": [
+            {"name": "Uptown Funk", "artist": "Mark Ronson ft. Bruno Mars", "preview": None, "external_url": "https://open.spotify.com/track/32OlwWuMpZ6b0aN2RZOeMS"},
+            {"name": "Don't Stop Me Now", "artist": "Queen", "preview": None, "external_url": "https://open.spotify.com/track/5T8EDUDqKcs6OSOwEsfqG7"},
+            {"name": "Can't Hold Us", "artist": "Macklemore", "preview": None, "external_url": "https://open.spotify.com/track/3DK6m7It6Pw857FcQftMds"}
+        ],
+        "calm": [
+            {"name": "Weightless", "artist": "Marconi Union", "preview": None, "external_url": "https://open.spotify.com/track/3rCLsaUhdI5nIQdHWo8dOJ"},
+            {"name": "Claire de Lune", "artist": "Claude Debussy", "preview": None, "external_url": "https://open.spotify.com/track/1Awsqv8AQfhOXsafRDf3HV"},
+            {"name": "Holocene", "artist": "Bon Iver", "preview": None, "external_url": "https://open.spotify.com/track/6wAFjJlNSz2zd6ER3vz7MD"}
+        ]
+    }
+    
+    # Return mood-specific tracks or default to calm
+    return mood_recommendations.get(mood, mood_recommendations.get("calm", []))
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8002))
