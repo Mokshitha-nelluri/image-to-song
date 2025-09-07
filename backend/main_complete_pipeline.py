@@ -631,8 +631,9 @@ async def get_mixed_recommendations(request: Dict[str, str]):
             print(f"🎵 Anonymous tracks returned: {anon_tracks}")
             print(f"📊 Number of tracks: {len(anon_tracks) if anon_tracks else 0}")
             
-            results["mood_based"] = anon_tracks
-            results["discovery"] = [{"name": f"Discover {mood.title()} Music", "artist": "Mood Radio", "preview": None}]
+            # Ensure we always have arrays, not None
+            results["mood_based"] = anon_tracks if anon_tracks else []
+            results["discovery"] = [{"name": f"Discover {mood.title()} Music", "artist": "Mood Radio", "preview": None, "external_url": "#"}]
             results["summary"] = {
                 "total_recommendations": len(results["mood_based"]) + len(results["discovery"]),
                 "breakdown": {
@@ -773,7 +774,7 @@ def get_mood_audio_features(mood: str) -> Dict[str, float]:
 def get_anonymous_recommendations(mood: str):
     """Get fallback recommendations when user is not authenticated"""
     
-    print(f"🔍 Getting anonymous recommendations for mood: {mood}")
+    print(f"🔍 Getting anonymous recommendations for mood: '{mood}'")
     
     mood_recommendations = {
         "happy": [
@@ -798,9 +799,12 @@ def get_anonymous_recommendations(mood: str):
         ]
     }
     
+    # Check available moods
+    print(f"📋 Available moods: {list(mood_recommendations.keys())}")
+    
     # Return mood-specific tracks or default to calm
     result = mood_recommendations.get(mood, mood_recommendations.get("calm", []))
-    print(f"📋 Mood '{mood}' mapped to {len(result)} tracks")
+    print(f"📋 Mood '{mood}' mapped to {len(result)} tracks: {[t['name'] for t in result] if result else 'None'}")
     return result
 
 if __name__ == "__main__":
