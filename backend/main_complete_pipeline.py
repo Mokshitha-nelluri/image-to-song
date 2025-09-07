@@ -569,6 +569,24 @@ async def analyze_image(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Image analysis failed: {error_msg}")
 
+@app.post("/simple-anonymous")
+async def simple_anonymous_recommendations(request: Dict[str, str]):
+    """Simple anonymous recommendations without external API calls"""
+    mood = request.get('mood', 'neutral')
+    caption = request.get('caption', '')
+    
+    print(f"🎵 Simple anonymous recommendations for mood: {mood}")
+    
+    result = {
+        "mood": mood,
+        "caption": caption,
+        "recommendations": get_anonymous_recommendations(mood),
+        "mode": "anonymous_simple"
+    }
+    
+    print(f"📊 Simple result: {result}")
+    return result
+
 @app.get("/test-anonymous/{mood}")
 async def test_anonymous(mood: str):
     """Test endpoint for anonymous recommendations"""
