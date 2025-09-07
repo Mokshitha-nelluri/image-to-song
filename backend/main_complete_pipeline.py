@@ -47,35 +47,65 @@ class SimpleImageAnalyzer:
     def analyze_image(self, image_data: bytes) -> Dict[str, Any]:
         """Analyze image and extract mood - simplified version for deployment"""
         try:
+            print(f"SimpleImageAnalyzer: Starting analysis of {len(image_data)} bytes")
+            
             # Open and analyze image
-            image = Image.open(io.BytesIO(image_data))
-            width, height = image.size
+            try:
+                image = Image.open(io.BytesIO(image_data))
+                print(f"SimpleImageAnalyzer: Successfully opened image")
+            except Exception as e:
+                print(f"SimpleImageAnalyzer: Failed to open image: {e}")
+                raise Exception(f"Failed to open image: {e}")
+            
+            try:
+                width, height = image.size
+                print(f"SimpleImageAnalyzer: Image size: {width}x{height}")
+            except Exception as e:
+                print(f"SimpleImageAnalyzer: Failed to get image size: {e}")
+                raise Exception(f"Failed to get image size: {e}")
             
             # Get dominant colors (simplified)
-            image_rgb = image.convert('RGB')
-            colors = image_rgb.getcolors(maxcolors=256*256*256)
+            try:
+                image_rgb = image.convert('RGB')
+                print(f"SimpleImageAnalyzer: Converted to RGB")
+                colors = image_rgb.getcolors(maxcolors=256*256*256)
+                print(f"SimpleImageAnalyzer: Got {len(colors) if colors else 0} colors")
+            except Exception as e:
+                print(f"SimpleImageAnalyzer: Failed to get colors: {e}")
+                raise Exception(f"Failed to analyze colors: {e}")
             
             if colors:
-                dominant_color = max(colors, key=lambda x: x[0])[1]
-                r, g, b = dominant_color
-                
-                # Simple mood detection based on color analysis
-                brightness = (r + g + b) / 3
-                saturation = max(r, g, b) - min(r, g, b)
-                
-                mood = self._determine_mood_from_colors(r, g, b, brightness, saturation)
-                
-                color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
+                try:
+                    dominant_color = max(colors, key=lambda x: x[0])[1]
+                    r, g, b = dominant_color
+                    
+                    # Simple mood detection based on color analysis
+                    brightness = (r + g + b) / 3
+                    saturation = max(r, g, b) - min(r, g, b)
+                    
+                    mood = self._determine_mood_from_colors(r, g, b, brightness, saturation)
+                    
+                    color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
+                    print(f"SimpleImageAnalyzer: Color analysis successful - mood: {mood}")
+                except Exception as e:
+                    print(f"SimpleImageAnalyzer: Failed to analyze dominant color: {e}")
+                    raise Exception(f"Failed to analyze dominant color: {e}")
             else:
                 mood = "neutral"
                 r, g, b = 128, 128, 128  # Default gray
                 brightness = 128
                 color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
+                print(f"SimpleImageAnalyzer: No colors found, using defaults")
             
             # Generate a realistic caption based on image properties
-            caption = self._generate_caption(width, height, mood)
+            try:
+                caption = self._generate_caption(width, height, mood)
+                print(f"SimpleImageAnalyzer: Generated caption: {caption}")
+            except Exception as e:
+                print(f"SimpleImageAnalyzer: Failed to generate caption: {e}")
+                caption = "a beautiful scene"
             
-            return {
+            result = {
                 "caption": caption,
                 "mood": mood,
                 "confidence": 0.85,
@@ -84,12 +114,17 @@ class SimpleImageAnalyzer:
                 "analysis_method": "color_based"
             }
             
+            print(f"SimpleImageAnalyzer: Analysis complete: {result}")
+            return result
+            
         except Exception as e:
+            error_msg = str(e) if str(e) else f"Unknown SimpleImageAnalyzer error of type {type(e).__name__}"
+            print(f"SimpleImageAnalyzer: Exception occurred: {error_msg}")
             return {
                 "caption": "a beautiful scene captured in an image",
                 "mood": "neutral",
                 "confidence": 0.5,
-                "error": str(e),
+                "error": error_msg,
                 "analysis_method": "fallback"
             }
     
@@ -514,11 +549,13 @@ async def analyze_image(file: UploadFile = File(...)):
     except HTTPException:
         raise  # Re-raise HTTP exceptions
     except Exception as e:
-        print(f"Image analysis exception: {str(e)}")
+        error_msg = str(e) if str(e) else f"Unknown error of type {type(e).__name__}"
+        print(f"Image analysis exception: {error_msg}")
         print(f"Exception type: {type(e)}")
         import traceback
+        print(f"Full traceback:")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Image analysis failed: {error_msg}")
 
 @app.post("/mixed-recommendations")
 async def get_mixed_recommendations(request: Dict[str, str]):
