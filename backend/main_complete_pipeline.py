@@ -505,44 +505,77 @@ async def exchange_code_for_token(authorization_code: str):
 async def analyze_image(file: UploadFile = File(...)):
     """Analyze uploaded image and extract mood"""
     
+    print(f"🔍 === ANALYZE IMAGE REQUEST DEBUG ===")
+    print(f"Request received at: {__import__('datetime').datetime.now()}")
+    
     try:
-        print(f"Received file: {file.filename}, content_type: {file.content_type}")
+        print(f"📁 File details:")
+        print(f"  - filename: {file.filename}")
+        print(f"  - content_type: {file.content_type}")
+        print(f"  - file object type: {type(file)}")
         
-        # Read image data first
-        image_data = await file.read()
-        print(f"Read {len(image_data)} bytes of image data")
+        # Read image data first with error handling
+        try:
+            image_data = await file.read()
+            print(f"📏 File data read successfully: {len(image_data)} bytes")
+        except Exception as read_error:
+            print(f"❌ Failed to read file data: {read_error}")
+            raise HTTPException(status_code=400, detail=f"Failed to read file: {read_error}")
+        
+        # Enhanced validation
+        if len(image_data) == 0:
+            print(f"❌ Empty file detected")
+            raise HTTPException(status_code=400, detail="Empty file")
+        
+        if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
+            print(f"❌ File too large: {len(image_data)} bytes")
+            raise HTTPException(status_code=400, detail="File too large")
         
         # Try to detect if it's an image by reading the file signature
+        print(f"🔍 File signature analysis:")
+        print(f"  - First 20 bytes: {image_data[:20]}")
+        
         is_image = False
+        detected_format = "unknown"
+        
         if image_data.startswith(b'\xff\xd8\xff'):  # JPEG
             is_image = True
-            print("Detected JPEG image")
+            detected_format = "JPEG"
+            print("  - Detected: JPEG image ✓")
         elif image_data.startswith(b'\x89PNG\r\n\x1a\n'):  # PNG
             is_image = True
-            print("Detected PNG image")
+            detected_format = "PNG"
+            print("  - Detected: PNG image ✓")
         elif image_data.startswith(b'GIF87a') or image_data.startswith(b'GIF89a'):  # GIF
             is_image = True
-            print("Detected GIF image")
+            detected_format = "GIF"
+            print("  - Detected: GIF image ✓")
         elif image_data.startswith(b'RIFF') and b'WEBP' in image_data[:12]:  # WebP
             is_image = True
-            print("Detected WebP image")
+            detected_format = "WebP"
+            print("  - Detected: WebP image ✓")
         elif file.content_type and file.content_type.startswith('image/'):
             is_image = True
-            print(f"Detected image by content type: {file.content_type}")
+            detected_format = f"Content-Type: {file.content_type}"
+            print(f"  - Detected by content type: {file.content_type} ✓")
+        else:
+            print(f"  - Not recognized as image ❌")
         
         if not is_image:
-            print(f"Not an image - content_type: {file.content_type}, first 20 bytes: {image_data[:20]}")
+            print(f"❌ File validation failed - not an image")
             raise HTTPException(status_code=400, detail="File must be an image")
         
+        print(f"✅ Image validation passed - format: {detected_format}")
+        
         # Analyze image
-        print("Starting image analysis...")
+        print("🤖 Starting image analysis...")
         try:
             analysis_result = image_analyzer.analyze_image(image_data)
-            print(f"Analysis result: {analysis_result}")
+            print(f"📊 Analysis result: {analysis_result}")
             
             # Check if analysis returned an error
             if "error" in analysis_result:
-                print(f"Image analyzer returned error: {analysis_result['error']}")
+                print(f"⚠️ Image analyzer returned error: {analysis_result['error']}")
                 # Use the fallback result but don't fail the request
                 response_data = {
                     "status": "success",
@@ -563,7 +596,11 @@ async def analyze_image(file: UploadFile = File(...)):
                     **analysis_result
                 }
         except Exception as analysis_error:
-            print(f"Image analysis threw exception: {analysis_error}")
+            print(f"❌ Image analysis threw exception: {analysis_error}")
+            print(f"Exception type: {type(analysis_error)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            
             # Always return success with fallback data
             response_data = {
                 "status": "success",
@@ -576,7 +613,8 @@ async def analyze_image(file: UploadFile = File(...)):
                 "analysis_method": "fallback_safe"
             }
         
-        print(f"✅ Sending response: {response_data}")
+        print(f"✅ Final response data: {response_data}")
+        print(f"=== END ANALYZE IMAGE REQUEST ===")
         return response_data
         
     except HTTPException:
