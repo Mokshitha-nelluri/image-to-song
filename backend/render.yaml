@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: image-to-song-complete
+    env: python
+    repo: https://github.com/Mokshitha-nelluri/image-to-song.git
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main_complete_pipeline:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: SPOTIFY_REDIRECT_URI
+        sync: false
