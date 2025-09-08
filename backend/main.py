@@ -1173,23 +1173,27 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                         print(f"📀 Found {len(tracks)} tracks for '{search_query}'")
                         
                         tracks_with_preview = 0
+                        tracks_added = 0
                         for track in tracks:
-                            if track.get('preview_url'):  # Only songs with previews
+                            # Add all tracks, not just those with previews
+                            recommendations.append({
+                                "id": track['id'],
+                                "title": track['name'],
+                                "artist": track['artists'][0]['name'],
+                                "album": track['album']['name'],
+                                "preview_url": track.get('preview_url'),  # Optional now
+                                "spotify_url": track['external_urls']['spotify'],
+                                "album_cover": track['album']['images'][0]['url'] if track['album']['images'] else None,
+                                "popularity": track['popularity'],
+                                "duration_ms": track['duration_ms'],
+                                "explicit": track['explicit']
+                            })
+                            tracks_added += 1
+                            
+                            if track.get('preview_url'):
                                 tracks_with_preview += 1
-                                recommendations.append({
-                                    "id": track['id'],
-                                    "title": track['name'],
-                                    "artist": track['artists'][0]['name'],
-                                    "album": track['album']['name'],
-                                    "preview_url": track['preview_url'],
-                                    "spotify_url": track['external_urls']['spotify'],
-                                    "album_cover": track['album']['images'][0]['url'] if track['album']['images'] else None,
-                                    "popularity": track['popularity'],
-                                    "duration_ms": track['duration_ms'],
-                                    "explicit": track['explicit']
-                                })
                         
-                        print(f"🎵 {tracks_with_preview} tracks have preview URLs")
+                        print(f"🎵 Added {tracks_added} tracks ({tracks_with_preview} with previews)")
                         
                         if len(recommendations) >= 10:  # Got enough recommendations
                             break
@@ -1212,11 +1216,7 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         
         print(f"✅ Final recommendations: {len(unique_recommendations)}")
         
-        # If we don't have enough recommendations, try fallback without preview requirement
-        if len(unique_recommendations) < 3:
-            print("⚠️ Not enough recommendations with previews, trying fallback...")
-            return _get_fallback_recommendations(mood, user_profile)
-
+        # Always return what we found, no minimum threshold needed
         return {
             "success": True,
             "mood": mood,
@@ -1231,42 +1231,68 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Recommendations failed: {str(e)}")
 
 def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Build Spotify search parameters combining mood and user preferences"""
+    """Build comprehensive search parameters combining mood, user preferences, and popular tracks"""
     
-    # Base mood queries
+    # Base mood queries with more variety
     mood_queries = {
-        "happy": ["happy upbeat positive", "feel good songs", "uplifting music"],
-        "peaceful": ["calm peaceful relaxing", "chill ambient", "peaceful acoustic"],
-        "energetic": ["energetic pump up", "workout motivation", "high energy"],
-        "melancholic": ["sad emotional", "melancholic indie", "introspective ballad"],
-        "romantic": ["romantic love songs", "tender ballad", "romantic acoustic"],
-        "nature": ["nature peaceful", "organic acoustic", "environmental ambient"],
-        "neutral": ["popular trending", "top hits", "mainstream music"]
+        "happy": [
+            "happy upbeat positive", "feel good songs", "uplifting music",
+            "cheerful pop", "sunny day playlist", "joy happiness"
+        ],
+        "peaceful": [
+            "calm peaceful relaxing", "chill ambient", "peaceful acoustic",
+            "meditation music", "nature sounds", "serene instrumental"
+        ],
+        "energetic": [
+            "energetic pump up", "workout motivation", "high energy",
+            "dance electronic", "rock anthem", "adrenaline rush"
+        ],
+        "melancholic": [
+            "sad emotional", "melancholic indie", "introspective ballad",
+            "heartbreak songs", "contemplative music", "moody atmospheric"
+        ],
+        "romantic": [
+            "romantic love songs", "tender ballad", "romantic acoustic",
+            "love duet", "intimate playlist", "soulful R&B"
+        ],
+        "nature": [
+            "nature peaceful", "organic acoustic", "environmental ambient",
+            "folk country", "outdoor adventure", "earth sounds"
+        ],
+        "neutral": [
+            "popular trending", "top hits", "mainstream music",
+            "chart toppers", "radio favorites", "viral songs"
+        ]
     }
     
     base_queries = mood_queries.get(mood, mood_queries["neutral"])
     
-    # If user has preferences, personalize the search
+    # Build comprehensive search strategy
+    final_queries = []
+    
+    # 1. Add popular/trending songs for the mood (always include these)
+    final_queries.extend(base_queries[:2])
+    
+    # 2. Add user preference-based searches if available
     if user_profile and user_profile.get("genre_preferences"):
         genre_prefs = user_profile["genre_preferences"]
-        top_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:2]
+        top_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:3]
         
-        # Add genre-specific searches
-        personalized_queries = []
+        # Add genre-specific mood searches
         for genre, score in top_genres:
-            if score > 0.5:  # Only use genres they actually like
-                for base_query in base_queries[:2]:  # Limit to avoid too many queries
-                    personalized_queries.append(f"{base_query} {genre}")
+            if score > 0.4:  # Lower threshold for more variety
+                mood_term = base_queries[0].split()[0]  # Get first mood word
+                final_queries.append(f"{mood_term} {genre}")
         
-        # Combine personalized and general queries
-        final_queries = personalized_queries + base_queries
-        strategy = "personalized"
+        strategy = "hybrid_personalized"
     else:
-        final_queries = base_queries
-        strategy = "mood_based"
+        strategy = "mood_based_popular"
+    
+    # 3. Add general popular songs as fallback
+    final_queries.extend(["top 40 hits", "spotify viral"])
     
     return {
-        "queries": final_queries[:4],  # Limit to 4 queries max
+        "queries": final_queries[:6],  # Increased limit for more variety
         "strategy": strategy
     }
 
