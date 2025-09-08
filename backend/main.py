@@ -11,13 +11,14 @@ import hashlib
 import json
 import random
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 import httpx
+import numpy as np
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -82,7 +83,7 @@ class SimpleImageAnalyzer:
     """Simple image analyzer for mood detection"""
     
     def analyze_image(self, image_data: bytes) -> Dict[str, Any]:
-        """Analyze image and extract mood"""
+        """Enhanced image analyzer with better scene understanding"""
         try:
             print(f"🔍 SimpleImageAnalyzer: Starting analysis of {len(image_data)} bytes")
             
@@ -104,20 +105,21 @@ class SimpleImageAnalyzer:
                     # Fallback if color format is unexpected
                     r, g, b = 128, 128, 128
                 
-                # Color-based mood detection
+                # Enhanced color and context analysis
                 brightness = (r + g + b) / 3
                 saturation = max(r, g, b) - min(r, g, b)
                 
-                mood = self._determine_mood_from_colors(r, g, b, brightness, saturation)
+                # Analyze color distribution for better scene understanding
+                scene_context = self._analyze_scene_context(image_rgb, width, height)
+                mood, caption = self._determine_mood_and_scene(r, g, b, brightness, saturation, scene_context)
+                
                 color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
             else:
                 mood = "neutral"
+                caption = "a neutral scene"
                 r, g, b = 128, 128, 128
                 brightness = 128
                 color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
-            
-            # Generate caption
-            caption = self._generate_caption(width, height, mood)
             
             result = {
                 "caption": caption,
@@ -125,7 +127,7 @@ class SimpleImageAnalyzer:
                 "confidence": 0.85,
                 "colors": color_info,
                 "size": f"{width}x{height}",
-                "analysis_method": "color_based"
+                "analysis_method": "enhanced_color_context"
             }
             
             print(f"✅ Analysis complete: {result}")
@@ -196,6 +198,108 @@ class SimpleImageAnalyzer:
         
         mood_captions = captions.get(mood, ["scenic image with artistic composition"])
         return random.choice(mood_captions)
+    
+    def _analyze_scene_context(self, image_rgb, width: int, height: int) -> Dict[str, Any]:
+        """Analyze image for scene context clues using color distribution"""
+        try:
+            # Convert to numpy array for analysis
+            img_array = np.array(image_rgb)
+            
+            # Analyze color distribution in different regions
+            h, w = img_array.shape[:2]
+            
+            # Sky region (top 1/3)
+            sky_region = img_array[:h//3, :]
+            sky_blue = np.mean(sky_region[:, :, 2])  # Blue channel
+            
+            # Ground/water region (bottom 1/3) 
+            ground_region = img_array[2*h//3:, :]
+            ground_green = np.mean(ground_region[:, :, 1])  # Green channel
+            ground_blue = np.mean(ground_region[:, :, 2])   # Blue channel
+            
+            # Overall brightness distribution
+            brightness_std = np.std(np.mean(img_array, axis=2))
+            
+            return {
+                "sky_blue_intensity": sky_blue,
+                "ground_green_intensity": ground_green,
+                "ground_blue_intensity": ground_blue,
+                "brightness_variation": brightness_std,
+                "aspect_ratio": width / height if height > 0 else 1.0
+            }
+        except Exception:
+            return {
+                "sky_blue_intensity": 128,
+                "ground_green_intensity": 128, 
+                "ground_blue_intensity": 128,
+                "brightness_variation": 50,
+                "aspect_ratio": 1.0
+            }
+    
+    def _determine_mood_and_scene(self, r: int, g: int, b: int, brightness: float, 
+                                saturation: float, scene_context: Dict[str, Any]) -> Tuple[str, str]:
+        """Enhanced mood and scene determination using color + context"""
+        
+        # Extract context clues
+        sky_blue = scene_context.get("sky_blue_intensity", 128)
+        ground_green = scene_context.get("ground_green_intensity", 128)
+        ground_blue = scene_context.get("ground_blue_intensity", 128)
+        brightness_var = scene_context.get("brightness_variation", 50)
+        aspect_ratio = scene_context.get("aspect_ratio", 1.0)
+        
+        # Nature scene detection
+        if (sky_blue > 150 and ground_green > 130) or (ground_blue > 140 and ground_green > 120):
+            # Likely nature scene (sky + vegetation or water + vegetation)
+            if brightness > 160:
+                mood = "peaceful"
+                caption = "serene natural landscape with bright sky and greenery"
+            else:
+                mood = "peaceful" 
+                caption = "tranquil nature scene with soft natural lighting"
+        
+        # Water/lake scene detection  
+        elif ground_blue > 160 and sky_blue > 140:
+            mood = "peaceful"
+            caption = "calm water scene reflecting the sky above"
+        
+        # Forest/green scene detection
+        elif ground_green > 150 and g > r and g > b:
+            mood = "nature"
+            caption = "lush forest scene with abundant greenery"
+            
+        # Sunset/warm scene detection
+        elif r > 160 and brightness > 140 and saturation > 80:
+            mood = "romantic"
+            caption = "warm scenic view with golden lighting"
+            
+        # High contrast/dramatic scene
+        elif brightness_var > 80:
+            if brightness > 150:
+                mood = "energetic"
+                caption = "dynamic scene with dramatic lighting contrasts"
+            else:
+                mood = "melancholic"
+                caption = "moody scene with atmospheric shadows and highlights"
+        
+        # Fallback to basic color analysis
+        else:
+            if brightness > 200 and saturation > 100:
+                mood = "energetic"
+                caption = "vibrant scene with bold colors and bright lighting"
+            elif brightness > 180:
+                mood = "happy"
+                caption = "bright and cheerful scene with warm lighting"
+            elif brightness < 80:
+                mood = "melancholic"
+                caption = "contemplative moment with subtle tones"
+            elif b > 150:  # Blue dominant
+                mood = "peaceful"
+                caption = "serene composition with cool blue tones"
+            else:
+                mood = "neutral"
+                caption = "balanced composition with natural lighting"
+        
+        return mood, caption
 
 # Initialize image analyzer
 image_analyzer = SimpleImageAnalyzer()
@@ -1236,7 +1340,7 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Recommendations failed: {str(e)}")
 
 def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Build intelligent search parameters using genre-based searches and audio feature filtering"""
+    """Build intelligent search parameters balancing scene context with user preferences"""
     
     # Audio features for post-search filtering (not search queries)
     mood_audio_features = {
@@ -1278,68 +1382,95 @@ def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, An
         }
     }
     
-    # Genre and keyword searches (ONLY these go to Spotify search)
-    search_strategies = {
+    # Scene-appropriate genre searches with balanced user integration
+    scene_based_strategies = {
         "happy": [
-            "genre:pop", "genre:dance-pop", "genre:funk", 
-            "upbeat mood:positive", "feel good", "sunshine"
+            "genre:pop", "genre:indie-pop", "feel good",
+            "upbeat positive", "cheerful", "sunny"
         ],
         "peaceful": [
-            "genre:ambient", "genre:new-age", "genre:folk",
-            "calm relaxing", "meditation", "peaceful"
+            "genre:ambient", "genre:folk", "genre:acoustic",
+            "calm peaceful", "nature sounds", "meditation"
         ],
         "energetic": [
-            "genre:electronic", "genre:rock", "genre:hip-hop",
-            "workout pump up", "high energy", "motivation"
+            "genre:electronic", "genre:dance", "genre:rock",
+            "high energy", "workout", "pump up"
         ],
         "melancholic": [
-            "genre:indie", "genre:alternative", "genre:blues",
-            "introspective", "contemplative", "reflective"
+            "genre:indie", "genre:alternative", "genre:singer-songwriter",
+            "introspective", "contemplative", "emotional"
         ],
         "romantic": [
             "genre:r-n-b", "genre:soul", "genre:acoustic",
             "love songs", "romantic", "intimate"
         ],
         "nature": [
-            "genre:folk", "genre:world-music", "genre:ambient",
-            "acoustic nature", "organic", "earthy"
+            "genre:folk", "genre:indie-folk", "genre:acoustic",
+            "nature organic", "earthy", "environmental"
         ]
     }
     
     mood_features = mood_audio_features.get(mood, mood_audio_features["happy"])
-    search_options = search_strategies.get(mood, search_strategies["happy"])
+    scene_searches = scene_based_strategies.get(mood, scene_based_strategies["happy"])
     
     final_queries = []
     
-    # 1. Search by GENRES (safe for Spotify search)
-    for search_term in search_options[:4]:  # Top 4 search strategies
-        final_queries.append(search_term)
+    # 1. Prioritize SCENE-APPROPRIATE genres (most important for context)
+    final_queries.extend(scene_searches[:3])  # Top 3 scene-based searches
     
-    # 2. Add user preference integration
+    # 2. Balanced user preference integration (limited influence)
     if user_profile and user_profile.get("genre_preferences"):
         genre_prefs = user_profile["genre_preferences"]
-        top_user_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:2]
+        top_user_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:3]
         
+        # Add user genres but keep scene context dominant
+        user_genre_count = 0
         for genre, score in top_user_genres:
-            if score > 0.3:
-                final_queries.append(f"genre:{genre}")
+            if score > 0.4 and user_genre_count < 2:  # Limit to 2 user genres max
+                # Check if user genre is compatible with scene mood
+                if _is_genre_mood_compatible(genre, mood):
+                    final_queries.append(f"genre:{genre}")
+                    user_genre_count += 1
         
-        strategy = "genre_personalized_with_audio_filtering"
+        strategy = "scene_balanced_personalized"
     else:
-        strategy = "genre_based_with_audio_filtering"
+        strategy = "scene_based_with_audio_filtering"
     
-    # 3. Add recent popular songs as fallback
+    # 3. Add scene-appropriate popular songs as fallback
     final_queries.extend([
-        "year:2020-2024",  # Recent songs
-        "popularity:50-100"  # Popular songs
+        f"year:2020-2024 {scene_searches[0].split()[0] if ' ' in scene_searches[0] else scene_searches[0]}",
+        "year:2018-2024 popularity:60-100"
     ])
     
     return {
-        "queries": final_queries[:6],
+        "queries": final_queries[:7],  # Balanced query count
         "strategy": strategy,
-        "audio_filters": mood_features,  # These will be used for POST-search filtering
-        "target_genres": search_options
+        "audio_filters": mood_features,
+        "scene_context": {
+            "mood": mood,
+            "caption": caption,
+            "priority": "scene_over_user"  # Scene context takes priority
+        }
     }
+
+def _is_genre_mood_compatible(genre: str, mood: str) -> bool:
+    """Check if a user's preferred genre is compatible with the scene mood"""
+    
+    # Genre-mood compatibility matrix
+    compatibility = {
+        "peaceful": ["folk", "acoustic", "indie", "ambient", "jazz", "classical", "new age"],
+        "nature": ["folk", "acoustic", "indie-folk", "world", "ambient", "country"],
+        "melancholic": ["indie", "alternative", "folk", "acoustic", "blues", "ambient"],
+        "romantic": ["r&b", "soul", "acoustic", "jazz", "indie", "pop"],
+        "happy": ["pop", "indie", "funk", "dance", "electronic", "reggae"],
+        "energetic": ["rock", "electronic", "hip-hop", "dance", "punk", "metal"]
+    }
+    
+    compatible_genres = compatibility.get(mood, [])
+    genre_lower = genre.lower()
+    
+    # Check if genre matches any compatible genres
+    return any(comp_genre in genre_lower for comp_genre in compatible_genres)
 
 def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str, audio_filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Rank songs based on musical characteristics and mood appropriateness with audio feature scoring"""
