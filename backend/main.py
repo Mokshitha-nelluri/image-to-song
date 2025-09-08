@@ -1031,33 +1031,38 @@ async def analyze_and_recommend(file: UploadFile = File(...)) -> Dict[str, Any]:
                     "analysis_method": "enhanced_hybrid_mapping_fallback"
                 }
             
-            # Search for songs using the enhanced queries
+            # Search for songs using the intelligent queries
             songs = []
-            for query in search_queries[:4]:  # Use top 4 queries
+            all_tracks = []
+            
+            # Collect all tracks from different search strategies
+            for query in search_queries[:6]:  # Use top 6 queries
                 try:
-                    search_results = await search_spotify_songs(query, limit=5)
+                    search_results = await search_spotify_songs(query, limit=8)
                     if search_results and "tracks" in search_results:
                         for track in search_results["tracks"]["items"]:
-                            if track["id"] not in [s.get("id") for s in songs]:  # Avoid duplicates
-                                songs.append({
+                            if track["id"] not in [t.get("id") for t in all_tracks]:  # Avoid duplicates
+                                all_tracks.append({
                                     "id": track["id"],
                                     "name": track["name"],
                                     "artist": ", ".join([artist["name"] for artist in track["artists"]]),
                                     "preview_url": track.get("preview_url"),
                                     "spotify_url": track["external_urls"]["spotify"],
                                     "image": track["album"]["images"][0]["url"] if track["album"]["images"] else None,
-                                    "query_used": query
+                                    "popularity": track.get("popularity", 0),
+                                    "explicit": track.get("explicit", False),
+                                    "duration_ms": track.get("duration_ms", 0),
+                                    "query_used": query,
+                                    "album": track["album"]["name"],
+                                    "release_date": track["album"].get("release_date", "")
                                 })
-                                
-                                if len(songs) >= 20:  # Limit to 20 songs
-                                    break
-                    
-                    if len(songs) >= 20:
-                        break
                         
                 except Exception as e:
                     print(f"Search failed for query '{query}': {e}")
                     continue
+            
+            # Smart filtering and ranking based on musical characteristics
+            filtered_songs = _rank_songs_by_characteristics(all_tracks, mood)
             
             return {
                 "status": "success",
@@ -1065,9 +1070,9 @@ async def analyze_and_recommend(file: UploadFile = File(...)) -> Dict[str, Any]:
                 "image_analysis": analysis_result,
                 "music_profile": music_profile,
                 "search_queries": search_queries,
-                "recommendations": songs[:15],  # Return top 15
-                "total_found": len(songs),
-                "analysis_method": "enhanced_hybrid_mapping"
+                "recommendations": filtered_songs[:15],  # Return top 15 ranked songs
+                "total_found": len(all_tracks),
+                "analysis_method": "intelligent_characteristic_matching"
             }
         
         else:
@@ -1231,70 +1236,187 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Recommendations failed: {str(e)}")
 
 def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Build comprehensive search parameters combining mood, user preferences, and popular tracks"""
+    """Build intelligent search parameters mapping moods to musical characteristics and popular songs"""
     
-    # Base mood queries with more variety
-    mood_queries = {
-        "happy": [
-            "happy upbeat positive", "feel good songs", "uplifting music",
-            "cheerful pop", "sunny day playlist", "joy happiness"
-        ],
-        "peaceful": [
-            "calm peaceful relaxing", "chill ambient", "peaceful acoustic",
-            "meditation music", "nature sounds", "serene instrumental"
-        ],
-        "energetic": [
-            "energetic pump up", "workout motivation", "high energy",
-            "dance electronic", "rock anthem", "adrenaline rush"
-        ],
-        "melancholic": [
-            "sad emotional", "melancholic indie", "introspective ballad",
-            "heartbreak songs", "contemplative music", "moody atmospheric"
-        ],
-        "romantic": [
-            "romantic love songs", "tender ballad", "romantic acoustic",
-            "love duet", "intimate playlist", "soulful R&B"
-        ],
-        "nature": [
-            "nature peaceful", "organic acoustic", "environmental ambient",
-            "folk country", "outdoor adventure", "earth sounds"
-        ],
-        "neutral": [
-            "popular trending", "top hits", "mainstream music",
-            "chart toppers", "radio favorites", "viral songs"
-        ]
+    # Smart mood-to-music mapping focusing on ARTISTS, GENRES, and MUSICAL FEATURES
+    mood_search_strategies = {
+        "happy": {
+            "artists": ["Pharrell Williams", "Bruno Mars", "Dua Lipa", "Justin Timberlake", "Lizzo"],
+            "genres": ["pop", "funk", "dance pop", "upbeat rock"],
+            "characteristics": ["major key", "upbeat tempo", "energetic"],
+            "popular_songs": ["Happy", "Uptown Funk", "Can't Stop the Feeling", "Good as Hell"]
+        },
+        "peaceful": {
+            "artists": ["Bon Iver", "Norah Jones", "James Blake", "Billie Eilish", "Lana Del Rey"],
+            "genres": ["indie folk", "ambient", "soft rock", "chillout"],
+            "characteristics": ["slow tempo", "acoustic", "soft vocals"],
+            "popular_songs": ["Holocene", "Come Away With Me", "ocean eyes", "Video Games"]
+        },
+        "energetic": {
+            "artists": ["The Weeknd", "Daft Punk", "Calvin Harris", "Eminem", "Imagine Dragons"],
+            "genres": ["electronic", "hip hop", "rock", "dance"],
+            "characteristics": ["high energy", "driving beat", "powerful vocals"],
+            "popular_songs": ["Blinding Lights", "One More Time", "Thunder", "Lose Yourself"]
+        },
+        "melancholic": {
+            "artists": ["Radiohead", "Adele", "Johnny Cash", "The National", "Sufjan Stevens"],
+            "genres": ["alternative rock", "indie", "folk", "soul"],
+            "characteristics": ["minor key", "emotional vocals", "introspective"],
+            "popular_songs": ["Creep", "Someone Like You", "Hurt", "Mad World"]
+        },
+        "romantic": {
+            "artists": ["John Legend", "Ed Sheeran", "Alicia Keys", "Sam Smith", "H.E.R."],
+            "genres": ["R&B", "soul", "acoustic pop", "ballad"],
+            "characteristics": ["love theme", "tender vocals", "intimate"],
+            "popular_songs": ["All of Me", "Perfect", "Stay With Me", "Best Part"]
+        },
+        "nature": {
+            "artists": ["Fleet Foxes", "Iron & Wine", "Kings of Leon", "Mumford & Sons"],
+            "genres": ["folk", "indie folk", "acoustic", "country"],
+            "characteristics": ["organic sounds", "acoustic guitar", "natural themes"],
+            "popular_songs": ["White Winter Hymnal", "Boy with a Coin", "Use Somebody"]
+        },
+        "neutral": {
+            "artists": ["Taylor Swift", "Drake", "Billie Eilish", "Post Malone", "Ariana Grande"],
+            "genres": ["pop", "hip hop", "alternative"],
+            "characteristics": ["mainstream appeal", "current trends"],
+            "popular_songs": ["Anti-Hero", "God's Plan", "thank u, next", "Circles"]
+        }
     }
     
-    base_queries = mood_queries.get(mood, mood_queries["neutral"])
-    
-    # Build comprehensive search strategy
+    strategy_data = mood_search_strategies.get(mood, mood_search_strategies["neutral"])
     final_queries = []
     
-    # 1. Add popular/trending songs for the mood (always include these)
-    final_queries.extend(base_queries[:2])
+    # 1. Search by POPULAR ARTISTS known for this mood
+    artists = strategy_data["artists"][:3]  # Top 3 artists
+    for artist in artists:
+        final_queries.append(f"artist:{artist}")
     
-    # 2. Add user preference-based searches if available
+    # 2. Search by GENRE combinations
+    genres = strategy_data["genres"][:2]  # Top 2 genres
+    for genre in genres:
+        final_queries.append(f"genre:{genre}")
+    
+    # 3. Add user preference integration if available
     if user_profile and user_profile.get("genre_preferences"):
         genre_prefs = user_profile["genre_preferences"]
-        top_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:3]
+        top_user_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:2]
         
-        # Add genre-specific mood searches
-        for genre, score in top_genres:
-            if score > 0.4:  # Lower threshold for more variety
-                mood_term = base_queries[0].split()[0]  # Get first mood word
-                final_queries.append(f"{mood_term} {genre}")
+        # Combine user preferences with mood-appropriate artists
+        for genre, score in top_user_genres:
+            if score > 0.3:
+                # Find artists from user's preferred genre that match the mood
+                final_queries.append(f"genre:{genre}")
         
-        strategy = "hybrid_personalized"
+        strategy = "intelligent_personalized"
     else:
-        strategy = "mood_based_popular"
+        strategy = "intelligent_mood_based"
     
-    # 3. Add general popular songs as fallback
-    final_queries.extend(["top 40 hits", "spotify viral"])
+    # 4. Add popular songs as backup (without explicit mood words)
+    final_queries.extend(["year:2020-2024", "popularity:70..100"])
     
     return {
-        "queries": final_queries[:6],  # Increased limit for more variety
-        "strategy": strategy
+        "queries": final_queries[:8],  # More diverse queries
+        "strategy": strategy,
+        "mood_context": strategy_data
     }
+
+def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str) -> List[Dict[str, Any]]:
+    """Rank songs based on musical characteristics and mood appropriateness"""
+    
+    # Define mood preferences for ranking
+    mood_preferences = {
+        "happy": {
+            "min_popularity": 30,
+            "prefer_recent": True,
+            "avoid_explicit": True,
+            "duration_range": (120000, 300000)  # 2-5 minutes
+        },
+        "melancholic": {
+            "min_popularity": 20,
+            "prefer_recent": False,
+            "avoid_explicit": False,
+            "duration_range": (180000, 360000)  # 3-6 minutes
+        },
+        "energetic": {
+            "min_popularity": 40,
+            "prefer_recent": True,
+            "avoid_explicit": False,
+            "duration_range": (150000, 300000)  # 2.5-5 minutes
+        },
+        "peaceful": {
+            "min_popularity": 15,
+            "prefer_recent": False,
+            "avoid_explicit": True,
+            "duration_range": (180000, 420000)  # 3-7 minutes
+        },
+        "romantic": {
+            "min_popularity": 25,
+            "prefer_recent": False,
+            "avoid_explicit": True,
+            "duration_range": (200000, 360000)  # 3-6 minutes
+        }
+    }
+    
+    preferences = mood_preferences.get(mood, mood_preferences["happy"])
+    scored_tracks = []
+    
+    for track in tracks:
+        score = 0
+        
+        # Popularity score (0-40 points)
+        popularity = track.get("popularity", 0)
+        if popularity >= preferences["min_popularity"]:
+            score += min(popularity * 0.4, 40)
+        
+        # Duration score (0-20 points)
+        duration = track.get("duration_ms", 0)
+        if preferences["duration_range"][0] <= duration <= preferences["duration_range"][1]:
+            score += 20
+        elif duration > 0:
+            score += 10  # Partial points for any duration
+        
+        # Explicit content penalty
+        if preferences["avoid_explicit"] and track.get("explicit", False):
+            score -= 15
+        
+        # Recent release bonus
+        release_date = track.get("release_date", "")
+        if preferences["prefer_recent"] and release_date:
+            try:
+                year = int(release_date[:4])
+                if year >= 2020:
+                    score += 15
+                elif year >= 2015:
+                    score += 8
+            except (ValueError, IndexError):
+                pass
+        
+        # Avoid songs with obvious mood words in title (too literal)
+        title_lower = track.get("name", "").lower()
+        literal_mood_words = ["sad", "happy", "emotional", "melancholic", "depressed", "joyful"]
+        if any(word in title_lower for word in literal_mood_words):
+            score -= 25  # Heavy penalty for literal mood words
+        
+        # Bonus for real artists (not generic background music)
+        artist_name = track.get("artist", "").lower()
+        generic_terms = ["background", "instrumental", "meditation", "royalty free", "stock"]
+        if not any(term in artist_name for term in generic_terms):
+            score += 10
+        
+        scored_tracks.append((score, track))
+    
+    # Sort by score descending and return the tracks
+    scored_tracks.sort(key=lambda x: x[0], reverse=True)
+    
+    # Convert back to list of tracks with enhanced info
+    ranked_tracks = []
+    for score, track in scored_tracks:
+        enhanced_track = track.copy()
+        enhanced_track["ranking_score"] = score
+        ranked_tracks.append(enhanced_track)
+    
+    return ranked_tracks
 
 async def search_spotify_songs(query: str, limit: int = 20) -> Optional[Dict[str, Any]]:
     """Search Spotify for songs using a query"""
