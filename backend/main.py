@@ -1146,6 +1146,9 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         # Combine image mood with user preferences
         search_params = _build_search_parameters(mood, caption, user_profile)
         
+        print(f"🔍 Search queries: {search_params['queries']}")
+        print(f"📋 Strategy: {search_params['strategy']}")
+        
         recommendations = []
         async with httpx.AsyncClient() as client:
             headers = {'Authorization': f'Bearer {token}'}
@@ -1153,6 +1156,7 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
             # Search for songs based on combined preferences
             for search_query in search_params["queries"]:
                 try:
+                    print(f"🎯 Searching for: '{search_query}'")
                     search_response = await client.get(
                         'https://api.spotify.com/v1/search',
                         headers=headers,
@@ -1166,8 +1170,12 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                     
                     if search_response.status_code == 200:
                         tracks = search_response.json()['tracks']['items']
+                        print(f"📀 Found {len(tracks)} tracks for '{search_query}'")
+                        
+                        tracks_with_preview = 0
                         for track in tracks:
                             if track.get('preview_url'):  # Only songs with previews
+                                tracks_with_preview += 1
                                 recommendations.append({
                                     "id": track['id'],
                                     "title": track['name'],
@@ -1181,11 +1189,15 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                                     "explicit": track['explicit']
                                 })
                         
+                        print(f"🎵 {tracks_with_preview} tracks have preview URLs")
+                        
                         if len(recommendations) >= 10:  # Got enough recommendations
                             break
+                    else:
+                        print(f"❌ Spotify search failed: {search_response.status_code}")
                             
                 except Exception as e:
-                    print(f"Search query failed: {search_query}, error: {e}")
+                    print(f"❌ Search query failed: {search_query}, error: {e}")
                     continue
         
         # Remove duplicates and limit results
@@ -1198,6 +1210,13 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                 if len(unique_recommendations) >= 8:
                     break
         
+        print(f"✅ Final recommendations: {len(unique_recommendations)}")
+        
+        # If we don't have enough recommendations, try fallback without preview requirement
+        if len(unique_recommendations) < 3:
+            print("⚠️ Not enough recommendations with previews, trying fallback...")
+            return _get_fallback_recommendations(mood, user_profile)
+
         return {
             "success": True,
             "mood": mood,
