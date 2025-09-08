@@ -1236,89 +1236,100 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Recommendations failed: {str(e)}")
 
 def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Build intelligent search parameters mapping moods to musical characteristics and popular songs"""
+    """Build intelligent search parameters using Spotify's audio features and dynamic genre searches"""
     
-    # Smart mood-to-music mapping focusing on ARTISTS, GENRES, and MUSICAL FEATURES
-    mood_search_strategies = {
+    # Map moods to Spotify audio features (0.0 to 1.0 scale)
+    mood_audio_features = {
         "happy": {
-            "artists": ["Pharrell Williams", "Bruno Mars", "Dua Lipa", "Justin Timberlake", "Lizzo"],
-            "genres": ["pop", "funk", "dance pop", "upbeat rock"],
-            "characteristics": ["major key", "upbeat tempo", "energetic"],
-            "popular_songs": ["Happy", "Uptown Funk", "Can't Stop the Feeling", "Good as Hell"]
+            "valence": "0.7..1.0",        # High positivity
+            "energy": "0.6..1.0",         # High energy
+            "danceability": "0.6..1.0",   # Danceable
+            "tempo": "120..180",          # Upbeat tempo
+            "mode": "1",                  # Major key (1) vs Minor (0)
         },
         "peaceful": {
-            "artists": ["Bon Iver", "Norah Jones", "James Blake", "Billie Eilish", "Lana Del Rey"],
-            "genres": ["indie folk", "ambient", "soft rock", "chillout"],
-            "characteristics": ["slow tempo", "acoustic", "soft vocals"],
-            "popular_songs": ["Holocene", "Come Away With Me", "ocean eyes", "Video Games"]
+            "valence": "0.3..0.7",        # Neutral to positive
+            "energy": "0.0..0.4",         # Low energy
+            "acousticness": "0.5..1.0",   # Acoustic
+            "tempo": "60..100",           # Slow tempo
+            "instrumentalness": "0.0..1.0" # Allow instrumental
         },
         "energetic": {
-            "artists": ["The Weeknd", "Daft Punk", "Calvin Harris", "Eminem", "Imagine Dragons"],
-            "genres": ["electronic", "hip hop", "rock", "dance"],
-            "characteristics": ["high energy", "driving beat", "powerful vocals"],
-            "popular_songs": ["Blinding Lights", "One More Time", "Thunder", "Lose Yourself"]
+            "energy": "0.8..1.0",         # Very high energy
+            "danceability": "0.7..1.0",   # Very danceable
+            "tempo": "130..200",          # Fast tempo
+            "loudness": "-5..0",          # Loud
         },
         "melancholic": {
-            "artists": ["Radiohead", "Adele", "Johnny Cash", "The National", "Sufjan Stevens"],
-            "genres": ["alternative rock", "indie", "folk", "soul"],
-            "characteristics": ["minor key", "emotional vocals", "introspective"],
-            "popular_songs": ["Creep", "Someone Like You", "Hurt", "Mad World"]
+            "valence": "0.0..0.4",        # Low positivity (sad)
+            "energy": "0.2..0.6",         # Low to medium energy
+            "mode": "0",                  # Minor key
+            "acousticness": "0.3..1.0",   # More acoustic
+            "tempo": "60..120",           # Slower tempo
         },
         "romantic": {
-            "artists": ["John Legend", "Ed Sheeran", "Alicia Keys", "Sam Smith", "H.E.R."],
-            "genres": ["R&B", "soul", "acoustic pop", "ballad"],
-            "characteristics": ["love theme", "tender vocals", "intimate"],
-            "popular_songs": ["All of Me", "Perfect", "Stay With Me", "Best Part"]
+            "valence": "0.4..0.8",        # Positive but not too upbeat
+            "danceability": "0.3..0.7",   # Moderately danceable
+            "acousticness": "0.4..1.0",   # More acoustic/intimate
+            "energy": "0.3..0.7",         # Medium energy
         },
         "nature": {
-            "artists": ["Fleet Foxes", "Iron & Wine", "Kings of Leon", "Mumford & Sons"],
-            "genres": ["folk", "indie folk", "acoustic", "country"],
-            "characteristics": ["organic sounds", "acoustic guitar", "natural themes"],
-            "popular_songs": ["White Winter Hymnal", "Boy with a Coin", "Use Somebody"]
-        },
-        "neutral": {
-            "artists": ["Taylor Swift", "Drake", "Billie Eilish", "Post Malone", "Ariana Grande"],
-            "genres": ["pop", "hip hop", "alternative"],
-            "characteristics": ["mainstream appeal", "current trends"],
-            "popular_songs": ["Anti-Hero", "God's Plan", "thank u, next", "Circles"]
+            "acousticness": "0.7..1.0",   # Very acoustic
+            "instrumentalness": "0.3..1.0", # Allow instrumental
+            "energy": "0.2..0.6",         # Calm to medium energy
+            "valence": "0.4..0.8",        # Peaceful positive
         }
     }
     
-    strategy_data = mood_search_strategies.get(mood, mood_search_strategies["neutral"])
+    # Dynamic genre searches based on current trends
+    genre_search_strategies = {
+        "happy": ["pop", "dance-pop", "funk", "disco", "reggaeton", "afrobeat"],
+        "peaceful": ["ambient", "new-age", "folk", "indie-folk", "acoustic", "chill"],
+        "energetic": ["electronic", "edm", "rock", "hip-hop", "punk", "metal"],
+        "melancholic": ["indie", "alternative", "singer-songwriter", "blues", "emo"],
+        "romantic": ["r-n-b", "soul", "jazz", "bossa-nova", "love-songs"],
+        "nature": ["folk", "world-music", "ambient", "new-age", "acoustic"]
+    }
+    
+    mood_features = mood_audio_features.get(mood, mood_audio_features["happy"])
+    genre_options = genre_search_strategies.get(mood, genre_search_strategies["happy"])
+    
     final_queries = []
     
-    # 1. Search by POPULAR ARTISTS known for this mood
-    artists = strategy_data["artists"][:3]  # Top 3 artists
-    for artist in artists:
-        final_queries.append(f"artist:{artist}")
+    # 1. Search by AUDIO FEATURES (most important)
+    feature_query = " ".join([f"{key}:{value}" for key, value in mood_features.items()])
+    final_queries.append(feature_query)
     
-    # 2. Search by GENRE combinations
-    genres = strategy_data["genres"][:2]  # Top 2 genres
-    for genre in genres:
+    # 2. Search by GENRES (dynamic, not hardcoded artists)
+    for genre in genre_options[:3]:  # Top 3 genres for this mood
         final_queries.append(f"genre:{genre}")
     
-    # 3. Add user preference integration if available
+    # 3. Add user preference integration
     if user_profile and user_profile.get("genre_preferences"):
         genre_prefs = user_profile["genre_preferences"]
         top_user_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:2]
         
-        # Combine user preferences with mood-appropriate artists
         for genre, score in top_user_genres:
             if score > 0.3:
-                # Find artists from user's preferred genre that match the mood
-                final_queries.append(f"genre:{genre}")
+                # Combine user genre with mood features
+                user_query = f"genre:{genre} {list(mood_features.items())[0][0]}:{list(mood_features.items())[0][1]}"
+                final_queries.append(user_query)
         
-        strategy = "intelligent_personalized"
+        strategy = "audio_features_personalized"
     else:
-        strategy = "intelligent_mood_based"
+        strategy = "audio_features_based"
     
-    # 4. Add popular songs as backup (without explicit mood words)
-    final_queries.extend(["year:2020-2024", "popularity:70..100"])
+    # 4. Add recent popular songs as fallback
+    final_queries.extend([
+        "year:2020-2024 popularity:60..100",  # Recent popular songs
+        f"year:2015-2024 genre:{genre_options[0]}"  # Genre-specific recent songs
+    ])
     
     return {
-        "queries": final_queries[:8],  # More diverse queries
+        "queries": final_queries[:8],
         "strategy": strategy,
-        "mood_context": strategy_data
+        "audio_features": mood_features,
+        "target_genres": genre_options
     }
 
 def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str) -> List[Dict[str, Any]]:
