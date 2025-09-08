@@ -4,7 +4,7 @@ services:
     env: python
     repo: https://github.com/Mokshitha-nelluri/image-to-song.git
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-lite.txt
     startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: free
     envVars:
@@ -14,3 +14,5 @@ services:
         sync: false
       - key: SPOTIFY_REDIRECT_URI
         value: https://image-to-song-backend.onrender.com/spotify/callback
+      - key: RENDER_MEMORY_LIMIT
+        value: "true"

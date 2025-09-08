@@ -1,0 +1,33 @@
+# Lightweight requirements for free hosting
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# API and HTTP
+httpx>=0.25.0
+requests>=2.31.0
+
+# Data Processing
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# Image Processing (lightweight)
+pillow>=10.1.0
+numpy>=1.24.0
+
+# Production server
+gunicorn>=21.2.0
+
+# Runtime dependencies
+typing-extensions>=4.8.0
+
+# Optional: Only install AI dependencies if not memory constrained
+# torch>=2.0.0
+# transformers>=4.35.0
+# accelerate>=0.24.0
+# tokenizers>=0.15.0
+# safetensors>=0.4.0

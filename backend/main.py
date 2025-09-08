@@ -25,11 +25,24 @@ load_dotenv()
 
 # Import existing services if available, otherwise use fallbacks
 try:
-    from app.core.config import settings
-    from app.services.hybrid_ai_service import hybrid_service
-    from app.utils.image_music_mapper import image_music_mapper
-    USE_AI_SERVICE = True
-    print("✅ Using HybridImageService (BLIP + Color Analysis + Enhanced Mapping)")
+    # Check if we're in a memory-constrained environment
+    import os
+    MEMORY_LIMIT = os.getenv('RENDER_MEMORY_LIMIT', '').lower() == 'true'
+    
+    if MEMORY_LIMIT:
+        # Lightweight mode for free hosting
+        from app.core.config import settings
+        from app.utils.image_music_mapper import image_music_mapper
+        hybrid_service = None  # Skip heavy AI model
+        USE_AI_SERVICE = False
+        print("⚡ Using Lightweight Mode (No AI model - optimized for free hosting)")
+    else:
+        # Full mode with AI
+        from app.core.config import settings
+        from app.services.hybrid_ai_service import hybrid_service
+        from app.utils.image_music_mapper import image_music_mapper
+        USE_AI_SERVICE = True
+        print("✅ Using HybridImageService (BLIP + Color Analysis + Enhanced Mapping)")
 except ImportError:
     try:
         from app.core.config import settings
