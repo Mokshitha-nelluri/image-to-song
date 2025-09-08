@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'screens/login_screen.dart';
+import 'screens/welcome_screen.dart';
 
 void main() {
   runApp(const ImageToSongApp());
@@ -18,8 +18,9 @@ class ImageToSongApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
+        appBarTheme: const AppBarTheme(centerTitle: true, elevation: 0),
       ),
-      home: const LoginScreen(), // Start with login screen
+      home: const WelcomeScreen(), // Start with welcome screen
       debugShowCheckedModeBanner: false,
     );
   }

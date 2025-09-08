@@ -14,9 +14,24 @@ pydantic-settings>=2.0.0
 # Environment Management
 python-dotenv>=1.0.0
 
-# Image Processing (lightweight)
+# Image Processing
 pillow>=10.1.0
 numpy>=1.24.0
 
+# AI Dependencies for BLIP-2
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+
+# Additional AI/ML dependencies
+tokenizers>=0.15.0
+safetensors>=0.4.0
+
+# HTTP clients for Spotify API
+aiohttp>=3.9.0
+
 # Production server
 gunicorn>=21.2.0
+
+# Runtime dependencies
+typing-extensions>=4.8.0

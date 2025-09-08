@@ -140,14 +140,17 @@ class BLIP2Service:
             
             # Move to device if not using device_map
             if "device_map" not in model_kwargs:
-                self.model = self.model.to(self.device)
+                self.model = self.model.to(self.device)  # type: ignore
             
             # Set to evaluation mode
             self.model.eval()
             
             # Enable memory efficient attention if available
             if hasattr(self.model, 'enable_memory_efficient_attention'):
-                self.model.enable_memory_efficient_attention()
+                try:
+                    self.model.enable_memory_efficient_attention()  # type: ignore
+                except Exception as e:
+                    logger.warning(f"Could not enable memory efficient attention: {e}")
             
             logger.info(f"Model loaded with dtype: {self.model.dtype}")
             
@@ -233,32 +236,36 @@ class BLIP2Service:
     ) -> str:
         """Synchronous caption generation."""
         try:
+            # Check if model and processor are loaded
+            if self.model is None or self.processor is None:
+                raise RuntimeError("Model or processor not loaded")
+                
             # Load image
             image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
             
             # Process inputs
-            inputs = self.processor(
+            inputs = self.processor(  # type: ignore
                 image, 
                 return_tensors="pt"
             ).to(self.device)
             
             # Handle different dtypes
-            if self.device.type == "cuda" and self.model.dtype == torch.float16:
+            if self.device.type == "cuda" and hasattr(self.model, 'dtype') and self.model.dtype == torch.float16:
                 inputs = {k: v.half() if v.dtype == torch.float32 else v for k, v in inputs.items()}
             
             # Generate caption
             with torch.no_grad():
-                generated_ids = self.model.generate(
-                    **inputs,
+                generated_ids = self.model.generate(  # type: ignore
+                    **inputs,  # type: ignore
                     max_length=max_length,
                     num_beams=num_beams,
                     early_stopping=True,
-                    pad_token_id=self.processor.tokenizer.eos_token_id,
+                    pad_token_id=getattr(self.processor, 'tokenizer', {}).get('eos_token_id', 50256),  # type: ignore
                     do_sample=False  # Deterministic output
                 )
             
             # Decode caption
-            caption = self.processor.decode(
+            caption = self.processor.decode(  # type: ignore
                 generated_ids[0], 
                 skip_special_tokens=True
             ).strip()

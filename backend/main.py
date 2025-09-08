@@ -1,22 +1,21 @@
 """
-Complete Image-to-Song Pipeline
-OAuth + AI Image Analysis + Mixed Personalized Recommendations
-This is the main backend entry point with full functionality.
+Image-to-Song App: Quiz-Based Music Preference System
+Complete rewrite focusing on music quiz and preference-driven recommendations
 """
 import asyncio
 import io
 import time
 import base64
-import secrets
 import os
 import hashlib
+import json
+import random
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlencode
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Query, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse
 from PIL import Image
 import httpx
 from dotenv import load_dotenv
@@ -27,97 +26,85 @@ load_dotenv()
 # Import existing services if available, otherwise use fallbacks
 try:
     from app.core.config import settings
-    from app.services.ai_service import blip2_service
-    from app.utils.image_utils import ImageProcessor
+    from app.services.hybrid_ai_service import hybrid_service
+    from app.utils.image_music_mapper import image_music_mapper
     USE_AI_SERVICE = True
+    print("✅ Using HybridImageService (BLIP + Color Analysis + Enhanced Mapping)")
 except ImportError:
-    # Fallback configuration
-    class Settings:
-        APP_NAME = "Image-to-Song Complete Pipeline"
-        APP_VERSION = "2.0.0"
-        DEBUG = True
-        HOST = "0.0.0.0"
-        PORT = 8000
-        LOG_LEVEL = "INFO"
-        MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
-        ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/jpg", "image/webp"]
-        USE_GPU = False
-    
-    settings = Settings()
-    USE_AI_SERVICE = False
+    try:
+        from app.core.config import settings
+        from app.services.ai_service import blip2_service as hybrid_service
+        from app.utils.image_music_mapper import image_music_mapper
+        USE_AI_SERVICE = True
+        print("✅ Using BLIP2Service + Enhanced Mapping (fallback)")
+    except ImportError:
+        # Final fallback configuration
+        class Settings:
+            APP_NAME = "Image-to-Song Quiz App"
+            APP_VERSION = "3.0.0"
+            DEBUG = True
+            HOST = "0.0.0.0"
+            PORT = 8000
+            LOG_LEVEL = "INFO"
+            MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+            ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/jpg", "image/webp"]
+            USE_GPU = False
+        
+        settings = Settings()
+        hybrid_service = None
+        image_music_mapper = None
+        USE_AI_SERVICE = False
+        print("ℹ️ Using SimpleImageAnalyzer only (no AI models)")
 
-# Environment variables
+# Environment variables for Spotify Client Credentials (no user auth needed)
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID', '25de944a1992453896769027a9ffe3c1')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
-SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'https://image-to-song.onrender.com/spotify/callback')
 
-# In-memory storage for demo (use Redis/DB in production)
-auth_sessions = {}
-user_tokens = {}  # Store user tokens by session
+# Global variables
+app_startup_time = None
+spotify_access_token = None
+token_expires_at = 0
 
 class SimpleImageAnalyzer:
-    """Simple image analyzer without heavy AI dependencies for cloud deployment"""
+    """Simple image analyzer for mood detection"""
     
     def analyze_image(self, image_data: bytes) -> Dict[str, Any]:
-        """Analyze image and extract mood - simplified version for deployment"""
+        """Analyze image and extract mood"""
         try:
-            print(f"SimpleImageAnalyzer: Starting analysis of {len(image_data)} bytes")
+            print(f"🔍 SimpleImageAnalyzer: Starting analysis of {len(image_data)} bytes")
             
             # Open and analyze image
-            try:
-                image = Image.open(io.BytesIO(image_data))
-                print(f"SimpleImageAnalyzer: Successfully opened image")
-            except Exception as e:
-                print(f"SimpleImageAnalyzer: Failed to open image: {e}")
-                raise Exception(f"Failed to open image: {e}")
+            image = Image.open(io.BytesIO(image_data))
+            width, height = image.size
+            print(f"📏 Image size: {width}x{height}")
             
-            try:
-                width, height = image.size
-                print(f"SimpleImageAnalyzer: Image size: {width}x{height}")
-            except Exception as e:
-                print(f"SimpleImageAnalyzer: Failed to get image size: {e}")
-                raise Exception(f"Failed to get image size: {e}")
-            
-            # Get dominant colors (simplified)
-            try:
-                image_rgb = image.convert('RGB')
-                print(f"SimpleImageAnalyzer: Converted to RGB")
-                colors = image_rgb.getcolors(maxcolors=256*256*256)
-                print(f"SimpleImageAnalyzer: Got {len(colors) if colors else 0} colors")
-            except Exception as e:
-                print(f"SimpleImageAnalyzer: Failed to get colors: {e}")
-                raise Exception(f"Failed to analyze colors: {e}")
+            # Get dominant colors
+            image_rgb = image.convert('RGB')
+            colors = image_rgb.getcolors(maxcolors=256*256*256)
             
             if colors:
-                try:
-                    dominant_color = max(colors, key=lambda x: x[0])[1]
-                    r, g, b = dominant_color
-                    
-                    # Simple mood detection based on color analysis
-                    brightness = (r + g + b) / 3
-                    saturation = max(r, g, b) - min(r, g, b)
-                    
-                    mood = self._determine_mood_from_colors(r, g, b, brightness, saturation)
-                    
-                    color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
-                    print(f"SimpleImageAnalyzer: Color analysis successful - mood: {mood}")
-                except Exception as e:
-                    print(f"SimpleImageAnalyzer: Failed to analyze dominant color: {e}")
-                    raise Exception(f"Failed to analyze dominant color: {e}")
+                dominant_color = max(colors, key=lambda x: x[0])[1]
+                # Ensure we have a tuple of RGB values
+                if isinstance(dominant_color, (tuple, list)) and len(dominant_color) >= 3:
+                    r, g, b = dominant_color[:3]
+                else:
+                    # Fallback if color format is unexpected
+                    r, g, b = 128, 128, 128
+                
+                # Color-based mood detection
+                brightness = (r + g + b) / 3
+                saturation = max(r, g, b) - min(r, g, b)
+                
+                mood = self._determine_mood_from_colors(r, g, b, brightness, saturation)
+                color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
             else:
                 mood = "neutral"
-                r, g, b = 128, 128, 128  # Default gray
+                r, g, b = 128, 128, 128
                 brightness = 128
                 color_info = {"dominant": f"rgb({r},{g},{b})", "brightness": brightness}
-                print(f"SimpleImageAnalyzer: No colors found, using defaults")
             
-            # Generate a realistic caption based on image properties
-            try:
-                caption = self._generate_caption(width, height, mood)
-                print(f"SimpleImageAnalyzer: Generated caption: {caption}")
-            except Exception as e:
-                print(f"SimpleImageAnalyzer: Failed to generate caption: {e}")
-                caption = "a beautiful scene"
+            # Generate caption
+            caption = self._generate_caption(width, height, mood)
             
             result = {
                 "caption": caption,
@@ -128,12 +115,12 @@ class SimpleImageAnalyzer:
                 "analysis_method": "color_based"
             }
             
-            print(f"SimpleImageAnalyzer: Analysis complete: {result}")
+            print(f"✅ Analysis complete: {result}")
             return result
             
         except Exception as e:
-            error_msg = str(e) if str(e) else f"Unknown SimpleImageAnalyzer error of type {type(e).__name__}"
-            print(f"SimpleImageAnalyzer: Exception occurred: {error_msg}")
+            error_msg = str(e)
+            print(f"❌ SimpleImageAnalyzer error: {error_msg}")
             return {
                 "caption": "a beautiful scene captured in an image",
                 "mood": "neutral",
@@ -195,35 +182,466 @@ class SimpleImageAnalyzer:
         }
         
         mood_captions = captions.get(mood, ["scenic image with artistic composition"])
-        import random
         return random.choice(mood_captions)
 
 # Initialize image analyzer
 image_analyzer = SimpleImageAnalyzer()
 
-# Global variables for tracking
-app_startup_time = None
+# Quiz song database - curated songs with preview URLs
+QUIZ_SONGS = [
+    # Pop (4 songs)
+    {
+        "id": "4uLU6hMCjMI75M1A2tKUQC",
+        "title": "Anti-Hero",
+        "artist": "Taylor Swift",
+        "album": "Midnights",
+        "genres": ["pop", "indie pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",  # Will be updated with real URLs
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273bb54dde68cd23e2a268ae0f5",
+        "audio_features": {
+            "danceability": 0.579,
+            "energy": 0.513,
+            "valence": 0.321,
+            "acousticness": 0.257,
+            "instrumentalness": 0.000001,
+            "tempo": 96.881,
+            "loudness": -8.6
+        }
+    },
+    {
+        "id": "1BxfuPKGuaTgP7aM0Bbdwr",
+        "title": "Cruel Summer",
+        "artist": "Taylor Swift",
+        "album": "Lover",
+        "genres": ["pop", "synth-pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273e787cffec20aa2a396a61647",
+        "audio_features": {
+            "danceability": 0.552,
+            "energy": 0.702,
+            "valence": 0.564,
+            "acousticness": 0.117,
+            "instrumentalness": 0.000096,
+            "tempo": 169.994,
+            "loudness": -5.707
+        }
+    },
+    {
+        "id": "4Dvkj6JhhA12EX05fT7y2e",
+        "title": "As It Was",
+        "artist": "Harry Styles",
+        "album": "Harry's House",
+        "genres": ["pop", "art pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b2732e8ed79e177ff6011076f5f0",
+        "audio_features": {
+            "danceability": 0.685,
+            "energy": 0.549,
+            "valence": 0.359,
+            "acousticness": 0.361,
+            "instrumentalness": 0.000003,
+            "tempo": 108.009,
+            "loudness": -7.667
+        }
+    },
+    {
+        "id": "7qiZfU4dY1lWllzX7mPBI3",
+        "title": "Shape of You",
+        "artist": "Ed Sheeran",
+        "album": "÷ (Divide)",
+        "genres": ["pop", "dance pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273ba5db46f4b838ef6027e6f96",
+        "audio_features": {
+            "danceability": 0.825,
+            "energy": 0.652,
+            "valence": 0.931,
+            "acousticness": 0.581,
+            "instrumentalness": 0.000002,
+            "tempo": 95.977,
+            "loudness": -3.183
+        }
+    },
+    
+    # Rock (3 songs)
+    {
+        "id": "0VjIjW4GlULA4LGy1nby9d",
+        "title": "Bohemian Rhapsody",
+        "artist": "Queen",
+        "album": "A Night at the Opera",
+        "genres": ["rock", "classic rock"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273e319baafd16e84f0408af2a0",
+        "audio_features": {
+            "danceability": 0.495,
+            "energy": 0.618,
+            "valence": 0.579,
+            "acousticness": 0.213,
+            "instrumentalness": 0.001,
+            "tempo": 144.077,
+            "loudness": -8.235
+        }
+    },
+    {
+        "id": "4VqPOruhp5EdPBeR92t6lQ",
+        "title": "Stairway to Heaven",
+        "artist": "Led Zeppelin",
+        "album": "Led Zeppelin IV",
+        "genres": ["rock", "hard rock"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b2732ac77543e4dd391bfb3a93b6",
+        "audio_features": {
+            "danceability": 0.378,
+            "energy": 0.541,
+            "valence": 0.446,
+            "acousticness": 0.309,
+            "instrumentalness": 0.274,
+            "tempo": 81.995,
+            "loudness": -14.123
+        }
+    },
+    {
+        "id": "0JiV5NKJP0vC8hOJKWMJ7y",
+        "title": "Don't Stop Believin'",
+        "artist": "Journey",
+        "album": "Escape",
+        "genres": ["rock", "arena rock"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b2732e77e624a0225686f4e62af6",
+        "audio_features": {
+            "danceability": 0.563,
+            "energy": 0.736,
+            "valence": 0.899,
+            "acousticness": 0.00131,
+            "instrumentalness": 0.000014,
+            "tempo": 119.069,
+            "loudness": -6.011
+        }
+    },
+    
+    # Hip-Hop (3 songs)
+    {
+        "id": "6DCZcSspjsKoFjzjrWoCdn",
+        "title": "God's Plan",
+        "artist": "Drake",
+        "album": "Scorpion",
+        "genres": ["hip hop", "pop rap"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273f907de96b9a4fbc04accc0d5",
+        "audio_features": {
+            "danceability": 0.754,
+            "energy": 0.449,
+            "valence": 0.357,
+            "acousticness": 0.00685,
+            "instrumentalness": 0.000001,
+            "tempo": 77.169,
+            "loudness": -9.211
+        }
+    },
+    {
+        "id": "7ouMYWpwJ422jRcDASZB7P",
+        "title": "HUMBLE.",
+        "artist": "Kendrick Lamar",
+        "album": "DAMN.",
+        "genres": ["hip hop", "conscious rap"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b2738b52c6b9bc4e43d873869699",
+        "audio_features": {
+            "danceability": 0.904,
+            "energy": 0.621,
+            "valence": 0.421,
+            "acousticness": 0.000548,
+            "instrumentalness": 0.000024,
+            "tempo": 150.020,
+            "loudness": -6.842
+        }
+    },
+    {
+        "id": "5W3cjX2J3tjhG8zb6u0qHn",
+        "title": "Old Town Road",
+        "artist": "Lil Nas X",
+        "album": "7 EP",
+        "genres": ["hip hop", "country rap"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273a5c40298ab23da2ac819f9ab",
+        "audio_features": {
+            "danceability": 0.876,
+            "energy": 0.555,
+            "valence": 0.687,
+            "acousticness": 0.132,
+            "instrumentalness": 0.000003,
+            "tempo": 136.041,
+            "loudness": -8.871
+        }
+    },
+    
+    # Electronic (2 songs)
+    {
+        "id": "4Y7KDMX07MCuZo10LPW60s",
+        "title": "Clarity",
+        "artist": "Zedd",
+        "album": "Clarity",
+        "genres": ["electronic", "progressive house"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b27331c35347e0ec535429c0addc",
+        "audio_features": {
+            "danceability": 0.473,
+            "energy": 0.793,
+            "valence": 0.394,
+            "acousticness": 0.000234,
+            "instrumentalness": 0.000001,
+            "tempo": 128.026,
+            "loudness": -4.669
+        }
+    },
+    {
+        "id": "1vYXt7VSjH9JIM5oewBZNF",
+        "title": "Midnight City",
+        "artist": "M83",
+        "album": "Hurry Up, We're Dreaming",
+        "genres": ["electronic", "synthwave"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273bb0e9b14abea7d52e3f7ad58",
+        "audio_features": {
+            "danceability": 0.511,
+            "energy": 0.789,
+            "valence": 0.749,
+            "acousticness": 0.000069,
+            "instrumentalness": 0.893,
+            "tempo": 104.896,
+            "loudness": -6.398
+        }
+    },
+    
+    # Indie (2 songs)
+    {
+        "id": "2Z8WuEywRWYTKe1NybPQEW",
+        "title": "Somebody That I Used to Know",
+        "artist": "Gotye",
+        "album": "Making Mirrors",
+        "genres": ["indie", "alternative"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273f9c35bd8b2fbb68b90b7bbc6",
+        "audio_features": {
+            "danceability": 0.684,
+            "energy": 0.449,
+            "valence": 0.425,
+            "acousticness": 0.102,
+            "instrumentalness": 0.000063,
+            "tempo": 129.874,
+            "loudness": -7.883
+        }
+    },
+    {
+        "id": "0VE4kBnHJEhHWW8nnB2OAJ",
+        "title": "Young Folks",
+        "artist": "Peter Bjorn and John",
+        "album": "Writer's Block",
+        "genres": ["indie", "indie pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273abc34a5e2c52ec8f3b5ddd35",
+        "audio_features": {
+            "danceability": 0.728,
+            "energy": 0.712,
+            "valence": 0.819,
+            "acousticness": 0.186,
+            "instrumentalness": 0.105,
+            "tempo": 120.047,
+            "loudness": -6.895
+        }
+    },
+    
+    # R&B (2 songs)
+    {
+        "id": "7dt6x5M1jzdTEt8oCbisTK",
+        "title": "Redbone",
+        "artist": "Childish Gambino",
+        "album": "Awaken, My Love!",
+        "genres": ["r&b", "funk"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b2733b5e11ca1b063583df9492db",
+        "audio_features": {
+            "danceability": 0.738,
+            "energy": 0.345,
+            "valence": 0.467,
+            "acousticness": 0.423,
+            "instrumentalness": 0.000017,
+            "tempo": 158.784,
+            "loudness": -14.558
+        }
+    },
+    {
+        "id": "4rXVn5n57hCcKXJ5ZQeaB9",
+        "title": "Blinding Lights",
+        "artist": "The Weeknd",
+        "album": "After Hours",
+        "genres": ["r&b", "synthwave"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b2738863bc11d2aa12b54f5aeb36",
+        "audio_features": {
+            "danceability": 0.514,
+            "energy": 0.73,
+            "valence": 0.334,
+            "acousticness": 0.00146,
+            "instrumentalness": 0.000002,
+            "tempo": 171.009,
+            "loudness": -5.934
+        }
+    },
+    
+    # Country (2 songs)
+    {
+        "id": "1Je1IMUlBXcx1Fz0WE7oPT",
+        "title": "Cruise",
+        "artist": "Florida Georgia Line",
+        "album": "Here's to the Good Times",
+        "genres": ["country", "country pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273f9b8b5f60b6b2bb5f9b8b5f6",
+        "audio_features": {
+            "danceability": 0.648,
+            "energy": 0.693,
+            "valence": 0.959,
+            "acousticness": 0.0851,
+            "instrumentalness": 0.000000,
+            "tempo": 120.043,
+            "loudness": -4.359
+        }
+    },
+    {
+        "id": "1zHlj4dQ8ZAtrayhuDDmkY",
+        "title": "Need You Now",
+        "artist": "Lady Antebellum",
+        "album": "Need You Now",
+        "genres": ["country", "country pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273f9b8b5f60b6b2bb5f9b8b5f6",
+        "audio_features": {
+            "danceability": 0.567,
+            "energy": 0.506,
+            "valence": 0.284,
+            "acousticness": 0.372,
+            "instrumentalness": 0.000000,
+            "tempo": 132.013,
+            "loudness": -7.965
+        }
+    },
+    
+    # Alternative (2 songs)
+    {
+        "id": "7GhIk7Il098yCjg4BQjzvb",
+        "title": "Radioactive",
+        "artist": "Imagine Dragons",
+        "album": "Night Visions",
+        "genres": ["alternative", "rock"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273b83b446d40addb05b033e3ad",
+        "audio_features": {
+            "danceability": 0.593,
+            "energy": 0.867,
+            "valence": 0.334,
+            "acousticness": 0.000081,
+            "instrumentalness": 0.000002,
+            "tempo": 136.040,
+            "loudness": -4.464
+        }
+    },
+    {
+        "id": "1mea3bSkSGXuIRvnydlB5b",
+        "title": "Pumped Up Kicks",
+        "artist": "Foster the People",
+        "album": "Torches",
+        "genres": ["alternative", "indie pop"],
+        "preview_url": "https://p.scdn.co/mp3-preview/...",
+        "album_cover": "https://i.scdn.co/image/ab67616d0000b273f9b8b5f60b6b2bb5f9b8b5f6",
+        "audio_features": {
+            "danceability": 0.703,
+            "energy": 0.622,
+            "valence": 0.686,
+            "acousticness": 0.011,
+            "instrumentalness": 0.000105,
+            "tempo": 127.851,
+            "loudness": -6.958
+        }
+    }
+]
+
+async def get_spotify_token():
+    """Get Spotify access token using Client Credentials flow"""
+    global spotify_access_token, token_expires_at
+    
+    # Check if current token is still valid
+    current_time = time.time()
+    if spotify_access_token and current_time < token_expires_at:
+        return spotify_access_token
+    
+    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+        print("❌ Spotify credentials not configured")
+        return None
+    
+    try:
+        # Encode credentials
+        credentials = base64.b64encode(
+            f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
+        ).decode()
+        
+        headers = {
+            'Authorization': f'Basic {credentials}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        data = {'grant_type': 'client_credentials'}
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                'https://accounts.spotify.com/api/token',
+                headers=headers,
+                data=data
+            )
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                spotify_access_token = token_data['access_token']
+                expires_in = token_data.get('expires_in', 3600)
+                token_expires_at = current_time + expires_in - 60  # Refresh 1 min early
+                
+                print(f"✅ Got Spotify token, expires in {expires_in}s")
+                return spotify_access_token
+            else:
+                print(f"❌ Spotify token request failed: {response.status_code}")
+                return None
+                
+    except Exception as e:
+        print(f"❌ Failed to get Spotify token: {e}")
+        return None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+    """Application lifespan manager"""
     global app_startup_time
     
     # Startup
-    print("🚀 Starting Image-to-Song Complete Pipeline...")
+    print("🚀 Starting Image-to-Song Quiz App...")
     app_startup_time = time.time()
     
     # Load AI model if available
-    if USE_AI_SERVICE:
+    if USE_AI_SERVICE and hybrid_service:
         try:
-            print("Loading BLIP-2 model...")
-            await blip2_service.load_model()
-            print("✅ BLIP-2 model loaded successfully")
+            print("Loading Hybrid AI model...")
+            await hybrid_service.load_model()
+            print("✅ Hybrid AI model loaded successfully")
         except Exception as e:
-            print(f"❌ Failed to load BLIP-2 model: {e}")
+            print(f"❌ Failed to load Hybrid AI model: {e}")
             print("🔄 Falling back to simple analyzer")
     else:
         print("📝 Using simple image analyzer (no AI dependencies)")
+    
+    # Get initial Spotify token
+    token = await get_spotify_token()
+    if token:
+        print("✅ Spotify Client Credentials obtained")
+    else:
+        print("⚠️ Spotify integration not available")
     
     startup_duration = time.time() - app_startup_time
     print(f"✅ API started in {startup_duration:.2f} seconds")
@@ -231,10 +649,10 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    print("🛑 Shutting down Image-to-Song API...")
-    if USE_AI_SERVICE:
+    print("🛑 Shutting down Image-to-Song Quiz App...")
+    if USE_AI_SERVICE and hybrid_service:
         try:
-            await blip2_service.cleanup()
+            await hybrid_service.cleanup()
         except:
             pass
     print("✅ Cleanup completed")
@@ -243,7 +661,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="Complete Image-to-Song pipeline with OAuth and AI analysis",
+    description="Quiz-based music preference system with image analysis",
     lifespan=lifespan
 )
 
@@ -258,289 +676,223 @@ app.add_middleware(
 
 @app.get("/")
 async def root() -> Dict[str, Any]:
-    """Root endpoint with API information."""
+    """Root endpoint with API information"""
     return {
-        "message": "Image-to-Song Complete Pipeline API",
+        "message": "Image-to-Song Quiz App API",
         "version": settings.APP_VERSION,
         "status": "running",
         "features": {
-            "spotify_oauth": bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET),
+            "music_quiz": True,
             "image_analysis": True,
-            "mixed_recommendations": True,
-            "ai_service": USE_AI_SERVICE
+            "preference_recommendations": True,
+            "spotify_search": bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET),
+            "ai_service": USE_AI_SERVICE,
+            "song_previews": True
         },
         "endpoints": {
             "health": "/health",
-            "spotify_login": "/spotify/login",
-            "spotify_callback": "/spotify/callback",
+            "quiz_songs": "/quiz/songs",
+            "calculate_preferences": "/quiz/calculate-preferences",
             "analyze_image": "/analyze-image",
-            "mixed_recommendations": "/mixed-recommendations",
-            "model_info": "/model/info" if USE_AI_SERVICE else None,
-            "generate_caption": "/caption/generate" if USE_AI_SERVICE else None
+            "recommendations": "/recommendations",
+            "search_songs": "/search/songs"
         }
     }
 
 @app.get("/health")
 async def health_check() -> Dict[str, Any]:
-    """Health check endpoint with detailed status."""
+    """Health check endpoint with detailed status"""
     global app_startup_time
     
     uptime = time.time() - app_startup_time if app_startup_time else 0
     
     # Check if AI model is loaded (if using AI service)
     model_loaded = False
-    if USE_AI_SERVICE:
+    if USE_AI_SERVICE and hybrid_service:
         try:
-            model_info = await blip2_service.get_model_info()
+            model_info = await hybrid_service.get_model_info()
             model_loaded = model_info.get("status") == "loaded"
         except:
             model_loaded = False
     
+    # Check Spotify token status
+    spotify_status = "available" if spotify_access_token else "not_available"
+    
     return {
         "status": "healthy",
         "uptime_seconds": round(uptime, 2),
-        "model_loaded": model_loaded if USE_AI_SERVICE else "Not using AI service",
-        "user_authenticated": len(user_tokens) > 0,
+        "model_loaded": model_loaded if USE_AI_SERVICE else "using_simple_analyzer",
+        "spotify_status": spotify_status,
+        "quiz_songs_available": len(QUIZ_SONGS),
         "version": settings.APP_VERSION,
-        "features": {
-            "spotify_oauth": bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET),
-            "image_analysis": True,
-            "ai_service": USE_AI_SERVICE
-        },
         "timestamp": time.time()
     }
 
-@app.get("/model/info")
-async def get_model_info() -> Dict[str, Any]:
-    """Get information about the loaded AI model."""
-    if not USE_AI_SERVICE:
+# Quiz system endpoints
+@app.get("/quiz/songs")
+async def get_quiz_songs(limit: int = Query(20, ge=1, le=20)) -> Dict[str, Any]:
+    """Get randomized songs for the quiz"""
+    try:
+        # Shuffle and limit songs
+        shuffled_songs = random.sample(QUIZ_SONGS, min(limit, len(QUIZ_SONGS)))
+        
+        # Format for mobile app
+        quiz_songs = []
+        for i, song in enumerate(shuffled_songs):
+            quiz_songs.append({
+                "id": song["id"],
+                "title": song["title"],
+                "artist": song["artist"],
+                "album": song["album"],
+                "genres": song["genres"],
+                "preview_url": song["preview_url"],
+                "album_cover": song["album_cover"],
+                "quiz_position": i + 1,
+                "total_in_quiz": len(shuffled_songs)
+            })
+        
         return {
             "success": True,
-            "model_info": {
-                "status": "using_simple_analyzer",
-                "type": "Simple Image Analyzer",
-                "description": "Color-based mood detection"
+            "quiz_songs": quiz_songs,
+            "total_songs": len(quiz_songs),
+            "instructions": {
+                "swipe_right": "Like this song",
+                "swipe_left": "Pass on this song",
+                "tap_play": "Play 30-second preview",
+                "progress": f"Rate {len(quiz_songs)} songs to build your music profile"
             }
         }
-    
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get quiz songs: {str(e)}")
+
+@app.post("/quiz/calculate-preferences")
+async def calculate_preferences(quiz_results: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate user music preferences from quiz results"""
     try:
-        model_info = await blip2_service.get_model_info()
+        print(f"🧮 Calculating preferences from quiz results: {quiz_results}")
+        
+        # Extract liked and disliked songs
+        liked_songs = []
+        disliked_songs = []
+        
+        for song_rating in quiz_results.get("song_ratings", []):
+            song_id = song_rating.get("song_id")
+            user_liked = song_rating.get("liked")
+            
+            # Find the song in our database
+            song_data = next((s for s in QUIZ_SONGS if s["id"] == song_id), None)
+            if song_data:
+                if user_liked:
+                    liked_songs.append(song_data)
+                else:
+                    disliked_songs.append(song_data)
+        
+        print(f"👍 Liked songs: {len(liked_songs)}")
+        print(f"👎 Disliked songs: {len(disliked_songs)}")
+        
+        # Calculate genre preferences
+        genre_scores = {}
+        for song in liked_songs:
+            for genre in song["genres"]:
+                genre_scores[genre] = genre_scores.get(genre, 0) + 1
+        
+        for song in disliked_songs:
+            for genre in song["genres"]:
+                genre_scores[genre] = genre_scores.get(genre, 0) - 0.5
+        
+        # Normalize genre preferences to 0-1 scale
+        max_score = max(genre_scores.values()) if genre_scores else 1.0
+        genre_preferences = {
+            genre: float(max(0, score / max_score)) 
+            for genre, score in genre_scores.items()
+        }
+        
+        # Calculate audio feature preferences
+        feature_preferences = {}
+        audio_features = ['danceability', 'energy', 'valence', 'acousticness', 'instrumentalness']
+        
+        for feature in audio_features:
+            liked_values = [song["audio_features"][feature] for song in liked_songs]
+            disliked_values = [song["audio_features"][feature] for song in disliked_songs]
+            
+            if liked_values:
+                liked_avg = sum(liked_values) / len(liked_values)
+                
+                if disliked_values:
+                    disliked_avg = sum(disliked_values) / len(disliked_values)
+                    # Adjust preference away from disliked average
+                    preference = liked_avg + 0.1 * (liked_avg - disliked_avg)
+                else:
+                    preference = liked_avg
+                
+                feature_preferences[feature] = max(0, min(1, preference))
+            else:
+                feature_preferences[feature] = 0.5  # Default neutral
+        
+        # Generate user profile
+        user_profile = {
+            "user_id": quiz_results.get("user_id", f"user_{int(time.time())}"),
+            "created_at": time.time(),
+            "quiz_completed": True,
+            "genre_preferences": genre_preferences,
+            "audio_feature_preferences": feature_preferences,
+            "liked_artists": list(set([song["artist"] for song in liked_songs])),
+            "disliked_artists": list(set([song["artist"] for song in disliked_songs])),
+            "quiz_stats": {
+                "total_songs_rated": len(liked_songs) + len(disliked_songs),
+                "songs_liked": len(liked_songs),
+                "songs_disliked": len(disliked_songs),
+                "completion_rate": (len(liked_songs) + len(disliked_songs)) / len(QUIZ_SONGS)
+            }
+        }
+        
+        print(f"✅ User profile generated: {user_profile}")
+        
         return {
             "success": True,
-            "model_info": model_info
+            "user_profile": user_profile,
+            "summary": {
+                "top_genres": sorted(genre_preferences.items(), key=lambda x: x[1], reverse=True)[:3],
+                "music_personality": _generate_music_personality(genre_preferences, feature_preferences),
+                "recommendation_ready": True
+            }
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get model info: {str(e)}")
-
-# Spotify OAuth endpoints
-@app.get("/spotify/login")
-async def spotify_login():
-    """Start Spotify OAuth flow"""
-    if not SPOTIFY_CLIENT_ID:
-        raise HTTPException(status_code=500, detail="Spotify client ID not configured")
-    
-    state = secrets.token_urlsafe(32)
-    
-    params = {
-        'client_id': SPOTIFY_CLIENT_ID,
-        'response_type': 'code',
-        'redirect_uri': SPOTIFY_REDIRECT_URI,
-        'scope': 'user-read-private user-read-email user-library-read user-top-read playlist-read-private',
-        'state': state
-    }
-    
-    auth_sessions[state] = {'pending': True}
-    
-    auth_url = f"https://accounts.spotify.com/authorize?{urlencode(params)}"
-    
-    return {
-        "auth_url": auth_url,
-        "state": state,
-        "message": "Visit the auth_url to authorize with Spotify"
-    }
-
-@app.get("/spotify/callback")
-async def spotify_callback(
-    code: str = Query(...),
-    state: str = Query(...),
-    error: str = Query(None)
-):
-    """Handle Spotify OAuth callback"""
-    
-    if error:
-        # Redirect to mobile app with error
-        return HTMLResponse(f"""
-        <html>
-        <body>
-        <h2>❌ Authorization Failed</h2>
-        <p>Error: {error}</p>
-        <p>You can close this window and try again in the app.</p>
-        <script>
-        setTimeout(() => window.close(), 3000);
-        </script>
-        </body>
-        </html>
-        """)
-    
-    if state not in auth_sessions:
-        return HTMLResponse("""
-        <html>
-        <body>
-        <h2>❌ Invalid Session</h2>
-        <p>Session expired or invalid. Please try again.</p>
-        <script>
-        setTimeout(() => window.close(), 3000);
-        </script>
-        </body>
-        </html>
-        """)
-    
-    try:
-        token_data = await exchange_code_for_token(code)
         
-        if 'access_token' in token_data:
-            # Store token
-            user_tokens[state] = {
-                'access_token': token_data['access_token'],
-                'refresh_token': token_data.get('refresh_token'),
-                'expires_in': token_data.get('expires_in')
-            }
-            
-            # Return success page that closes automatically
-            return HTMLResponse(f"""
-            <html>
-            <head>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Spotify Connected!</title>
-            </head>
-            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background: linear-gradient(135deg, #1DB954, #1ed760);">
-                <div style="background: white; border-radius: 15px; padding: 30px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto;">
-                    <h2 style="color: #1DB954; margin-bottom: 20px;">✅ Spotify Connected!</h2>
-                    <p style="color: #333; margin-bottom: 20px;">Your account has been successfully linked.</p>
-                    <p style="color: #666; font-size: 14px;">Session ID: <code>{state}</code></p>
-                    <p style="color: #666; font-size: 14px;">You can now close this window and return to the app.</p>
-                    <div style="margin-top: 20px;">
-                        <button onclick="window.close()" style="background: #1DB954; color: white; border: none; padding: 10px 20px; border-radius: 25px; cursor: pointer;">Close Window</button>
-                    </div>
-                </div>
-                <script>
-                    // Auto-close after 3 seconds
-                    setTimeout(() => {{
-                        window.close();
-                    }}, 3000);
-                    
-                    // Try to communicate with mobile app (if WebView supports it)
-                    if (window.ReactNativeWebView) {{
-                        window.ReactNativeWebView.postMessage(JSON.stringify({{
-                            type: 'SPOTIFY_AUTH_SUCCESS',
-                            state: '{state}'
-                        }}));
-                    }}
-                </script>
-            </body>
-            </html>
-            """)
-            
-        else:
-            raise HTTPException(status_code=400, detail="Failed to get access token")
-            
     except Exception as e:
-        return HTMLResponse(f"""
-        <html>
-        <body>
-        <h2>❌ Token Exchange Failed</h2>
-        <p>Error: {str(e)}</p>
-        <script>
-        setTimeout(() => window.close(), 3000);
-        </script>
-        </body>
-        </html>
-        """)
+        raise HTTPException(status_code=500, detail=f"Failed to calculate preferences: {str(e)}")
 
-async def exchange_code_for_token(authorization_code: str):
-    """Exchange authorization code for access token"""
-    credentials = base64.b64encode(f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()).decode()
+def _generate_music_personality(genre_prefs: Dict[str, float], feature_prefs: Dict[str, float]) -> str:
+    """Generate a fun music personality description"""
+    top_genre = max(genre_prefs.items(), key=lambda x: x[1])[0] if genre_prefs else "eclectic"
     
-    headers = {
-        'Authorization': f'Basic {credentials}',
-        'Content-Type': 'application/x-www-form-urlencoded'
+    energy_level = feature_prefs.get("energy", 0.5)
+    valence_level = feature_prefs.get("valence", 0.5)
+    danceability = feature_prefs.get("danceability", 0.5)
+    
+    personalities = {
+        ("pop", "high_energy", "positive"): "Pop Enthusiast - You love catchy, upbeat songs that make you smile!",
+        ("rock", "high_energy", "positive"): "Rock Warrior - You crave powerful, energetic anthems!",
+        ("hip hop", "high_energy", "positive"): "Hip-Hop Head - You vibe with rhythmic beats and clever lyrics!",
+        ("electronic", "high_energy", "positive"): "Electronic Explorer - You're drawn to digital soundscapes and dance beats!",
+        ("indie", "medium_energy", "positive"): "Indie Soul - You appreciate artistic, alternative sounds!",
+        ("r&b", "medium_energy", "positive"): "R&B Lover - You're into smooth, soulful melodies!",
+        ("country", "medium_energy", "positive"): "Country Heart - You enjoy storytelling and authentic vibes!",
+        ("alternative", "medium_energy", "neutral"): "Alternative Spirit - You march to your own musical beat!"
     }
     
-    data = {
-        'grant_type': 'authorization_code',
-        'code': authorization_code,
-        'redirect_uri': SPOTIFY_REDIRECT_URI
-    }
+    # Classify energy and mood
+    energy_cat = "high_energy" if energy_level > 0.6 else "medium_energy"
+    mood_cat = "positive" if valence_level > 0.6 else "neutral"
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post('https://accounts.spotify.com/api/token', headers=headers, data=data)
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=f"Token exchange failed: {response.text}")
+    personality_key = (top_genre, energy_cat, mood_cat)
+    return personalities.get(personality_key, f"Eclectic Listener - You have diverse taste in {top_genre} and beyond!")
 
-@app.get("/spotify/token/{state}")
-async def get_spotify_token(state: str):
-    """Get stored Spotify token for mobile app"""
-    if state not in user_tokens:
-        raise HTTPException(status_code=404, detail="Token not found or session expired")
-    
-    token_data = user_tokens[state]
-    return {
-        "access_token": token_data["access_token"],
-        "refresh_token": token_data.get("refresh_token"),
-        "expires_in": token_data.get("expires_in"),
-        "token_type": "Bearer"
-    }
-
-@app.post("/spotify/validate-token")
-async def validate_token(token: str):
-    """Validate a Spotify access token"""
-    try:
-        headers = {"Authorization": f"Bearer {token}"}
-        async with httpx.AsyncClient() as client:
-            response = await client.get("https://api.spotify.com/v1/me", headers=headers)
-            
-        if response.status_code == 200:
-            user_data = response.json()
-            return {
-                "valid": True,
-                "user": {
-                    "id": user_data.get("id"),
-                    "display_name": user_data.get("display_name"),
-                    "email": user_data.get("email")
-                }
-            }
-        else:
-            return {"valid": False, "error": "Token invalid or expired"}
-    except Exception as e:
-        return {"valid": False, "error": str(e)}
-
-@app.get("/spotify/status")
-async def spotify_status():
-    """Check Spotify authentication status"""
-    
-    valid_tokens = 0
-    has_token = False
-    
-    for token_data in user_tokens.values():
-        if 'access_token' in token_data:
-            valid_tokens += 1
-            has_token = True
-    
-    return {
-        "has_token": has_token,
-        "user_count": valid_tokens,
-        "total_users": len(user_tokens)
-    }
-
-# Main pipeline endpoints
+# Image analysis endpoint
 @app.post("/analyze-image")
 async def analyze_image(file: UploadFile = File(...)):
-    """Analyze uploaded image using AI or simple analyzer"""
-    
-    print(f"🔍 === ANALYZE IMAGE ===")
+    """Analyze uploaded image for mood and context"""
+    print(f"🖼️ === ANALYZE IMAGE ===")
     print(f"📁 File: {file.filename}")
     print(f"📄 Content-Type: {file.content_type}")
     
@@ -550,516 +902,621 @@ async def analyze_image(file: UploadFile = File(...)):
         print(f"📏 File size: {len(image_data)} bytes")
         
         if len(image_data) == 0:
-            print("❌ Empty file")
             raise HTTPException(status_code=400, detail="Empty file received")
         
-        # File signature check
-        if len(image_data) >= 4:
-            signature = ' '.join([f'{b:02x}' for b in image_data[:4]])
-            print(f"🔍 File signature: {signature}")
-        
         # Use AI service if available, otherwise use simple analyzer
-        if USE_AI_SERVICE:
+        if USE_AI_SERVICE and hybrid_service:
             try:
-                # Validate image format using ImageProcessor
-                if not ImageProcessor.validate_image(image_data):
-                    raise HTTPException(status_code=400, detail="Invalid image format")
+                # Check if this is the hybrid service or old service
+                if hasattr(hybrid_service, 'analyze_image'):
+                    # New hybrid service
+                    result = await hybrid_service.analyze_image(image_data)  # type: ignore
+                    result["filename"] = file.filename or "image.jpg"
+                else:
+                    # Old BLIP2 service - generate caption and combine with simple analysis
+                    caption = await hybrid_service.generate_caption(image_data)  # type: ignore
+                    simple_result = image_analyzer.analyze_image(image_data)
+                    
+                    result = {
+                        "status": "success",
+                        "filename": file.filename or "image.jpg",
+                        "caption": caption,
+                        "mood": simple_result["mood"],
+                        "confidence": 0.9,
+                        "colors": simple_result["colors"],
+                        "size": simple_result["size"],
+                        "analysis_method": "blip2_plus_color"
+                    }
                 
-                # Get image information
-                image_info = ImageProcessor.get_image_info(image_data)
-                image_hash = ImageProcessor.calculate_image_hash(image_data)
-                
-                # Generate caption using AI
-                caption = await blip2_service.generate_caption(image_data)
-                
-                # Use simple analyzer for mood detection (combining with AI caption)
-                simple_result = image_analyzer.analyze_image(image_data)
-                
-                result = {
-                    "status": "success",
-                    "filename": file.filename or "image.jpg",
-                    "caption": caption,
-                    "mood": simple_result["mood"],
-                    "confidence": 0.9,
-                    "colors": simple_result["colors"],
-                    "size": f"{image_info.get('size', 'unknown')}",
-                    "analysis_method": "ai_plus_color",
-                    "hash": image_hash[:16] + "..." if image_hash else None
-                }
             except Exception as e:
                 print(f"AI analysis failed, falling back to simple: {e}")
                 result = image_analyzer.analyze_image(image_data)
                 result["status"] = "success"
                 result["filename"] = file.filename or "image.jpg"
         else:
-            # Use simple analyzer
+            # Use simple analyzer only
             result = image_analyzer.analyze_image(image_data)
             result["status"] = "success"
             result["filename"] = file.filename or "image.jpg"
         
-        print(f"✅ SUCCESS: {result}")
+        print(f"✅ Image analysis result: {result}")
         return result
         
     except HTTPException:
         raise
     except Exception as e:
-        error_msg = str(e) if str(e) else f"Unknown error of type {type(e).__name__}"
-        print(f"❌ Error: {error_msg}")
-        raise HTTPException(status_code=500, detail=f"Processing error: {error_msg}")
+        error_msg = str(e)
+        print(f"❌ Image analysis error: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Image processing failed: {error_msg}")
 
-@app.post("/mixed-recommendations")
-async def get_mixed_recommendations(request: Dict[str, str]):
-    """Get mixed recommendations: personalized + mood-based + discovery"""
-    
-    mood = request.get('mood', 'neutral')
-    caption = request.get('caption', '')
-    
+@app.post("/analyze-and-recommend")
+async def analyze_and_recommend(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """
+    Enhanced endpoint: Analyze image with BLIP + Color analysis, then generate music recommendations
+    using the intelligent image-to-music mapping system.
+    """
     try:
-        # Get user token (find any valid token for demo)
-        user_token = None
-        print(f"🔍 DEBUG: Checking {len(user_tokens)} stored token sessions...")
+        print(f"🎵 Enhanced Analysis & Recommendation for: {file.filename}")
         
-        for state_id, token_data in user_tokens.items():
-            print(f"🔑 Token session {state_id}: {list(token_data.keys())}")
-            if 'access_token' in token_data:
-                user_token = token_data['access_token']
-                print(f"✅ Found token: {user_token[:20]}..." if user_token else "❌ Empty token")
-                break
+        # First, analyze the image
+        image_data = await file.read()
         
-        print(f"🎵 Final token status: {'✅ Authenticated' if user_token else '❌ Anonymous mode'}")
-        
-        results = {
-            "mood": mood,
-            "caption": caption,
-            "personalized": [],
-            "mood_based": [],
-            "discovery": [],
-            "mode": "authenticated" if user_token else "anonymous"
-        }
-        
-        # If no token, provide fallback recommendations
-        if not user_token:
-            print("📱 Using anonymous fallback recommendations...")
-            anon_tracks = get_anonymous_recommendations(mood)
-            print(f"🎵 Anonymous tracks returned: {anon_tracks}")
-            print(f"📊 Number of tracks: {len(anon_tracks) if anon_tracks else 0}")
-            
-            # Ensure we always have arrays, not None
-            results["mood_based"] = anon_tracks if anon_tracks else []
-            results["discovery"] = [{"name": f"Discover {mood.title()} Music", "artist": "Mood Radio", "preview": None, "external_url": "#"}]
-            results["summary"] = {
-                "total_recommendations": len(results["mood_based"]) + len(results["discovery"]),
-                "breakdown": {
-                    "personalized": 0,
-                    "mood_based": len(results["mood_based"]),
-                    "discovery": len(results["discovery"])
-                }
-            }
-            print(f"📊 Final anonymous results: {results}")
-            return results
-            
-        async with httpx.AsyncClient() as client:
-            headers = {'Authorization': f'Bearer {user_token}'} if user_token else {}
-            
-            # 1. Personalized recommendations (if user is authenticated)
-            if user_token:
-                try:
-                    top_tracks_response = await client.get('https://api.spotify.com/v1/me/top/tracks?limit=3', headers=headers)
-                    if top_tracks_response.status_code == 200:
-                        top_tracks = top_tracks_response.json()['items']
-                        if top_tracks:
-                            # Use user's top tracks for personalized recommendations
-                            seed_tracks = ','.join([track['id'] for track in top_tracks[:2]])
-                            
-                            # Get mood-adjusted audio features
-                            mood_features = get_mood_audio_features(mood)
-                            
-                            rec_params = {
-                                'seed_tracks': seed_tracks,
-                                'limit': 6,
-                                **mood_features
-                            }
-                            
-                            rec_response = await client.get('https://api.spotify.com/v1/recommendations', headers=headers, params=rec_params)
-                            
-                            if rec_response.status_code == 200:
-                                recommendations = rec_response.json()['tracks']
-                                results["personalized"] = [
-                                    {
-                                        "name": track['name'],
-                                        "artist": track['artists'][0]['name'],
-                                        "popularity": track['popularity'],
-                                        "spotify_url": track['external_urls']['spotify']
-                                    }
-                                    for track in recommendations[:4]  # 60% of recommendations
-                                ]
-                except Exception as e:
-                    print(f"Personalized recommendations failed: {e}")
-            
-            # 2. Mood-based general search (30%)
-            mood_queries = {
-                "happy": "happy upbeat positive feel good",
-                "peaceful": "peaceful calm relaxing ambient",
-                "energetic": "energetic pump up workout motivation",
-                "melancholic": "sad melancholic emotional introspective",
-                "romantic": "romantic love ballad tender",
-                "nature": "nature peaceful acoustic organic"
-            }
-            
-            mood_query = mood_queries.get(mood, "popular trending")
-            
-            # Search for mood-based tracks
-            search_params = {
-                'q': mood_query,
-                'type': 'track',
-                'limit': 15,
-                'market': 'US'
-            }
-            
-            search_response = await client.get('https://api.spotify.com/v1/search', params=search_params)
-            
-            if search_response.status_code == 200:
-                search_results = search_response.json()['tracks']['items']
-                results["mood_based"] = [
-                    {
-                        "name": track['name'],
-                        "artist": track['artists'][0]['name'],
-                        "popularity": track['popularity'],
-                        "spotify_url": track['external_urls']['spotify']
+        # Use hybrid service if available
+        if USE_AI_SERVICE and hybrid_service:
+            try:
+                if hasattr(hybrid_service, 'analyze_image'):
+                    # New hybrid service
+                    analysis_result = await hybrid_service.analyze_image(image_data)  # type: ignore
+                else:
+                    # Old BLIP2 service - generate caption and combine with simple analysis
+                    caption = await hybrid_service.generate_caption(image_data)  # type: ignore
+                    simple_result = image_analyzer.analyze_image(image_data)
+                    
+                    analysis_result = {
+                        "caption": caption,
+                        "scene_description": caption,
+                        "mood": simple_result["mood"],
+                        "confidence": 0.9,
+                        "colors": simple_result["colors"],
+                        "size": simple_result["size"],
+                        "analysis_method": "blip2_plus_color"
                     }
-                    for track in search_results[:3]  # 30% of recommendations
-                ]
+                
+            except Exception as e:
+                print(f"AI analysis failed, using simple: {e}")
+                analysis_result = image_analyzer.analyze_image(image_data)
+        else:
+            # Use simple analyzer only
+            analysis_result = image_analyzer.analyze_image(image_data)
+        
+        # Create enhanced music profile using the mapper
+        if image_music_mapper and analysis_result:
+            scene_description = analysis_result.get("scene_description") or analysis_result.get("caption", "")
+            mood = analysis_result.get("mood", "neutral")
+            colors = analysis_result.get("colors", {})
             
-            # 3. Discovery (10%) - Popular tracks from different genres
-            discovery_queries = ["top hits 2024", "viral songs", "trending now"]
+            music_profile = image_music_mapper.create_music_profile(scene_description, mood, colors)
+            search_queries = image_music_mapper.get_search_queries(music_profile, mood)
             
-            for query in discovery_queries[:1]:  # Just one discovery search
-                discovery_params = {
-                    'q': query,
-                    'type': 'track',
-                    'limit': 10,
-                    'market': 'US'
+            print(f"🎼 Generated music profile: {music_profile['recommended_genres']}")
+            print(f"🔍 Search queries: {search_queries[:3]}")
+            
+            # Get Spotify token and search for songs
+            token = await get_spotify_token()
+            if not token:
+                print("⚠️ Spotify unavailable, using fallback recommendations from quiz songs")
+                # Fallback to quiz songs based on mood/genre
+                fallback_songs = _get_fallback_songs_for_analysis(music_profile, mood)
+                return {
+                    "status": "success",
+                    "filename": file.filename,
+                    "image_analysis": analysis_result,
+                    "music_profile": music_profile,
+                    "search_queries": search_queries,
+                    "recommendations": fallback_songs[:15],  # Return top 15
+                    "total_found": len(fallback_songs),
+                    "analysis_method": "enhanced_hybrid_mapping_fallback"
                 }
-                
-                discovery_response = await client.get('https://api.spotify.com/v1/search', params=discovery_params)
-                
-                if discovery_response.status_code == 200:
-                    discovery_results = discovery_response.json()['tracks']['items']
-                    results["discovery"] = [
-                        {
-                            "name": track['name'],
-                            "artist": track['artists'][0]['name'],
-                            "popularity": track['popularity'],
-                            "spotify_url": track['external_urls']['spotify']
+            
+            # Search for songs using the enhanced queries
+            songs = []
+            for query in search_queries[:4]:  # Use top 4 queries
+                try:
+                    search_results = await search_spotify_songs(query, limit=5)
+                    if search_results and "tracks" in search_results:
+                        for track in search_results["tracks"]["items"]:
+                            if track["id"] not in [s.get("id") for s in songs]:  # Avoid duplicates
+                                songs.append({
+                                    "id": track["id"],
+                                    "name": track["name"],
+                                    "artist": ", ".join([artist["name"] for artist in track["artists"]]),
+                                    "preview_url": track.get("preview_url"),
+                                    "spotify_url": track["external_urls"]["spotify"],
+                                    "image": track["album"]["images"][0]["url"] if track["album"]["images"] else None,
+                                    "query_used": query
+                                })
+                                
+                                if len(songs) >= 20:  # Limit to 20 songs
+                                    break
+                    
+                    if len(songs) >= 20:
+                        break
+                        
+                except Exception as e:
+                    print(f"Search failed for query '{query}': {e}")
+                    continue
+            
+            return {
+                "status": "success",
+                "filename": file.filename,
+                "image_analysis": analysis_result,
+                "music_profile": music_profile,
+                "search_queries": search_queries,
+                "recommendations": songs[:15],  # Return top 15
+                "total_found": len(songs),
+                "analysis_method": "enhanced_hybrid_mapping"
+            }
+        
+        else:
+            # Fallback to simple recommendation
+            mood = analysis_result.get("mood", "neutral")
+            base_queries = _generate_mood_based_queries(mood, analysis_result.get("caption", ""))
+            
+            # Get basic recommendations
+            token = await get_spotify_token()
+            if not token:
+                print("⚠️ Spotify unavailable, using fallback recommendations from quiz songs")
+                fallback_songs = _get_fallback_songs_by_mood(mood)
+                return {
+                    "status": "success", 
+                    "filename": file.filename,
+                    "image_analysis": analysis_result,
+                    "recommendations": fallback_songs,
+                    "total_found": len(fallback_songs),
+                    "analysis_method": "simple_fallback"
+                }
+            
+            songs = []
+            for query in base_queries[:3]:
+                try:
+                    search_results = await search_spotify_songs(query, limit=5)
+                    if search_results and "tracks" in search_results:
+                        for track in search_results["tracks"]["items"]:
+                            if track["id"] not in [s.get("id") for s in songs]:
+                                songs.append({
+                                    "id": track["id"],
+                                    "name": track["name"],
+                                    "artist": ", ".join([artist["name"] for artist in track["artists"]]),
+                                    "preview_url": track.get("preview_url"),
+                                    "spotify_url": track["external_urls"]["spotify"],
+                                    "image": track["album"]["images"][0]["url"] if track["album"]["images"] else None
+                                })
+                                
+                                if len(songs) >= 10:
+                                    break
+                except Exception as e:
+                    continue
+            
+            return {
+                "status": "success", 
+                "filename": file.filename,
+                "image_analysis": analysis_result,
+                "recommendations": songs,
+                "total_found": len(songs),
+                "analysis_method": "simple_fallback"
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        print(f"❌ Enhanced analysis error: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Enhanced analysis failed: {error_msg}")
+
+# Recommendation system
+@app.post("/recommendations")
+async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Get personalized song recommendations based on image mood + user preferences"""
+    try:
+        mood = request.get('mood', 'neutral')
+        caption = request.get('caption', '')
+        user_profile = request.get('user_profile', {})
+        
+        print(f"🎵 Getting recommendations for mood: {mood}")
+        print(f"👤 User profile provided: {bool(user_profile)}")
+        
+        # Get Spotify token
+        token = await get_spotify_token()
+        if not token:
+            return _get_fallback_recommendations(mood, user_profile)
+        
+        # Combine image mood with user preferences
+        search_params = _build_search_parameters(mood, caption, user_profile)
+        
+        recommendations = []
+        async with httpx.AsyncClient() as client:
+            headers = {'Authorization': f'Bearer {token}'}
+            
+            # Search for songs based on combined preferences
+            for search_query in search_params["queries"]:
+                try:
+                    search_response = await client.get(
+                        'https://api.spotify.com/v1/search',
+                        headers=headers,
+                        params={
+                            'q': search_query,
+                            'type': 'track',
+                            'limit': 20,
+                            'market': 'US'
                         }
-                        for track in discovery_results[:1]  # 10% of recommendations
-                    ]
+                    )
+                    
+                    if search_response.status_code == 200:
+                        tracks = search_response.json()['tracks']['items']
+                        for track in tracks:
+                            if track.get('preview_url'):  # Only songs with previews
+                                recommendations.append({
+                                    "id": track['id'],
+                                    "title": track['name'],
+                                    "artist": track['artists'][0]['name'],
+                                    "album": track['album']['name'],
+                                    "preview_url": track['preview_url'],
+                                    "spotify_url": track['external_urls']['spotify'],
+                                    "album_cover": track['album']['images'][0]['url'] if track['album']['images'] else None,
+                                    "popularity": track['popularity'],
+                                    "duration_ms": track['duration_ms'],
+                                    "explicit": track['explicit']
+                                })
+                        
+                        if len(recommendations) >= 10:  # Got enough recommendations
+                            break
+                            
+                except Exception as e:
+                    print(f"Search query failed: {search_query}, error: {e}")
+                    continue
+        
+        # Remove duplicates and limit results
+        seen_ids = set()
+        unique_recommendations = []
+        for rec in recommendations:
+            if rec["id"] not in seen_ids:
+                seen_ids.add(rec["id"])
+                unique_recommendations.append(rec)
+                if len(unique_recommendations) >= 8:
                     break
         
-        # Add recommendation counts
-        results["summary"] = {
-            "total_recommendations": len(results["personalized"]) + len(results["mood_based"]) + len(results["discovery"]),
-            "breakdown": {
-                "personalized": len(results["personalized"]),
-                "mood_based": len(results["mood_based"]),
-                "discovery": len(results["discovery"])
-            }
-        }
-        
-        return results
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Mixed recommendations failed: {str(e)}")
-
-def get_mood_audio_features(mood: str) -> Dict[str, float]:
-    """Get Spotify audio features based on mood"""
-    mood_features = {
-        "happy": {"target_valence": 0.8, "target_energy": 0.7, "target_danceability": 0.8},
-        "peaceful": {"target_valence": 0.4, "target_energy": 0.3, "target_acousticness": 0.7},
-        "energetic": {"target_valence": 0.7, "target_energy": 0.9, "target_danceability": 0.8},
-        "melancholic": {"target_valence": 0.2, "target_energy": 0.4, "target_acousticness": 0.6},
-        "romantic": {"target_valence": 0.6, "target_energy": 0.5, "target_acousticness": 0.5},
-        "nature": {"target_valence": 0.5, "target_energy": 0.4, "target_acousticness": 0.8}
-    }
-    
-    return mood_features.get(mood, {"target_valence": 0.5, "target_energy": 0.5})
-
-def get_anonymous_recommendations(mood: str):
-    """Get fallback recommendations when user is not authenticated"""
-    
-    print(f"🔍 Getting anonymous recommendations for mood: '{mood}'")
-    
-    mood_recommendations = {
-        "happy": [
-            {"name": "Happy", "artist": "Pharrell Williams", "preview": None, "external_url": "https://open.spotify.com/track/60nZcImufyMA1MKQY3dcCH"},
-            {"name": "Good as Hell", "artist": "Lizzo", "preview": None, "external_url": "https://open.spotify.com/track/1LLXZFeAHK9R4xUramtUKw"},
-            {"name": "Can't Stop the Feeling!", "artist": "Justin Timberlake", "preview": None, "external_url": "https://open.spotify.com/track/4bHsxqR3GMrXTxEPLuK5ue"}
-        ],
-        "melancholic": [
-            {"name": "The Night We Met", "artist": "Lord Huron", "preview": None, "external_url": "https://open.spotify.com/track/0NdTUS4UiNYCNn5FgVqKQY"},
-            {"name": "Skinny Love", "artist": "Bon Iver", "preview": None, "external_url": "https://open.spotify.com/track/2Ek2iSEoDv7IwKxhWXNShN"},
-            {"name": "Mad World", "artist": "Gary Jules", "preview": None, "external_url": "https://open.spotify.com/track/3JOVTQ5h8HGFnDdp4VT3MP"}
-        ],
-        "energetic": [
-            {"name": "Uptown Funk", "artist": "Mark Ronson ft. Bruno Mars", "preview": None, "external_url": "https://open.spotify.com/track/32OlwWuMpZ6b0aN2RZOeMS"},
-            {"name": "Don't Stop Me Now", "artist": "Queen", "preview": None, "external_url": "https://open.spotify.com/track/5T8EDUDqKcs6OSOwEsfqG7"},
-            {"name": "Can't Hold Us", "artist": "Macklemore", "preview": None, "external_url": "https://open.spotify.com/track/3DK6m7It6Pw857FcQftMds"}
-        ],
-        "peaceful": [
-            {"name": "Weightless", "artist": "Marconi Union", "preview": None, "external_url": "https://open.spotify.com/track/3rCLsaUhdI5nIQdHWo8dOJ"},
-            {"name": "Claire de Lune", "artist": "Claude Debussy", "preview": None, "external_url": "https://open.spotify.com/track/1Awsqv8AQfhOXsafRDf3HV"},
-            {"name": "Holocene", "artist": "Bon Iver", "preview": None, "external_url": "https://open.spotify.com/track/6wAFjJlNSz2zd6ER3vz7MD"}
-        ],
-        "nature": [
-            {"name": "River", "artist": "Leon Bridges", "preview": None, "external_url": "https://open.spotify.com/track/4Qa4GnP6gLVpL5DZqsKGHC"},
-            {"name": "Forest", "artist": "System of a Down", "preview": None, "external_url": "https://open.spotify.com/track/31TvWB4wf0iBDyVsMLOFAf"},
-            {"name": "Mountain", "artist": "Heartbreak on the Map", "preview": None, "external_url": "https://open.spotify.com/track/2eXVIy5ZjWgJqN9gWJn4yp"}
-        ],
-        "romantic": [
-            {"name": "All of Me", "artist": "John Legend", "preview": None, "external_url": "https://open.spotify.com/track/3U4isOIWM3VvDubwSI3y7a"},
-            {"name": "Perfect", "artist": "Ed Sheeran", "preview": None, "external_url": "https://open.spotify.com/track/0tgVpDi06FyKpA1z0VMD4v"},
-            {"name": "Thinking Out Loud", "artist": "Ed Sheeran", "preview": None, "external_url": "https://open.spotify.com/track/0Qp8L0kSMXOm8jQf9Nz5H6"}
-        ]
-    }
-    
-    # Check available moods
-    print(f"📋 Available moods: {list(mood_recommendations.keys())}")
-    
-    # Return mood-specific tracks or default to peaceful
-    result = mood_recommendations.get(mood, mood_recommendations.get("peaceful", []))
-    print(f"📋 Mood '{mood}' mapped to {len(result)} tracks: {[t['name'] for t in result] if result else 'None'}")
-    return result
-
-# Keep existing AI-focused endpoints for compatibility (but add fallback support)
-@app.post("/caption/generate")
-async def generate_caption(
-    background_tasks: BackgroundTasks,
-    image: UploadFile = File(..., description="Image file to generate caption for")
-) -> Dict[str, Any]:
-    """Generate a caption for an uploaded image (AI service or fallback)."""
-    start_time = time.time()
-    
-    try:
-        # Validate file type
-        if image.content_type not in settings.ALLOWED_IMAGE_TYPES:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Unsupported image type. Allowed types: {settings.ALLOWED_IMAGE_TYPES}"
-            )
-        
-        # Read image bytes
-        image_bytes = await image.read()
-        
-        # Validate file size
-        if len(image_bytes) > settings.MAX_IMAGE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Image too large. Maximum size: {settings.MAX_IMAGE_SIZE / (1024*1024):.1f}MB"
-            )
-        
-        if USE_AI_SERVICE:
-            # Validate image format
-            if not ImageProcessor.validate_image(image_bytes):
-                raise HTTPException(status_code=400, detail="Invalid image format")
-            
-            # Get image information
-            image_info = ImageProcessor.get_image_info(image_bytes)
-            image_hash = ImageProcessor.calculate_image_hash(image_bytes)
-            
-            # Generate caption
-            caption_start_time = time.time()
-            caption = await blip2_service.generate_caption(image_bytes)
-            caption_time = time.time() - caption_start_time
-        else:
-            # Use simple analyzer for caption
-            analysis = image_analyzer.analyze_image(image_bytes)
-            caption = analysis.get("caption", "a beautiful scene")
-            caption_time = 0.1
-            image_info = {"size": "unknown", "format": "unknown"}
-            image_hash = hashlib.md5(image_bytes).hexdigest()
-        
-        total_time = time.time() - start_time
-        
-        # Prepare response
-        response_data = {
+        return {
             "success": True,
+            "mood": mood,
             "caption": caption,
-            "image_info": {
-                "filename": image.filename,
-                "size": image_info.get("size"),
-                "format": image_info.get("format"),
-                "file_size": len(image_bytes),
-                "hash": image_hash[:16] + "..." if image_hash else "unknown"
-            },
-            "processing_time": {
-                "total_seconds": round(total_time, 3),
-                "caption_generation_seconds": round(caption_time, 3)
-            },
-            "timestamp": time.time(),
-            "service_used": "ai" if USE_AI_SERVICE else "simple"
+            "recommendations": unique_recommendations,
+            "search_strategy": search_params["strategy"],
+            "total_found": len(unique_recommendations),
+            "personalized": bool(user_profile)
         }
         
-        # Log processing metrics (background task)
-        background_tasks.add_task(
-            log_processing_metrics,
-            image_hash if image_hash else "unknown",
-            caption_time,
-            total_time,
-            len(image_bytes)
-        )
-        
-        return response_data
-        
-    except HTTPException:
-        raise  # Re-raise HTTP exceptions
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Caption generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Recommendations failed: {str(e)}")
 
-@app.post("/image/process")
-async def process_image(
-    image: UploadFile = File(..., description="Image file to process")
-) -> Dict[str, Any]:
-    """Process an image and return detailed analysis (AI service or fallback)."""
-    start_time = time.time()
+def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Build Spotify search parameters combining mood and user preferences"""
     
+    # Base mood queries
+    mood_queries = {
+        "happy": ["happy upbeat positive", "feel good songs", "uplifting music"],
+        "peaceful": ["calm peaceful relaxing", "chill ambient", "peaceful acoustic"],
+        "energetic": ["energetic pump up", "workout motivation", "high energy"],
+        "melancholic": ["sad emotional", "melancholic indie", "introspective ballad"],
+        "romantic": ["romantic love songs", "tender ballad", "romantic acoustic"],
+        "nature": ["nature peaceful", "organic acoustic", "environmental ambient"],
+        "neutral": ["popular trending", "top hits", "mainstream music"]
+    }
+    
+    base_queries = mood_queries.get(mood, mood_queries["neutral"])
+    
+    # If user has preferences, personalize the search
+    if user_profile and user_profile.get("genre_preferences"):
+        genre_prefs = user_profile["genre_preferences"]
+        top_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:2]
+        
+        # Add genre-specific searches
+        personalized_queries = []
+        for genre, score in top_genres:
+            if score > 0.5:  # Only use genres they actually like
+                for base_query in base_queries[:2]:  # Limit to avoid too many queries
+                    personalized_queries.append(f"{base_query} {genre}")
+        
+        # Combine personalized and general queries
+        final_queries = personalized_queries + base_queries
+        strategy = "personalized"
+    else:
+        final_queries = base_queries
+        strategy = "mood_based"
+    
+    return {
+        "queries": final_queries[:4],  # Limit to 4 queries max
+        "strategy": strategy
+    }
+
+async def search_spotify_songs(query: str, limit: int = 20) -> Optional[Dict[str, Any]]:
+    """Search Spotify for songs using a query"""
     try:
-        # Read image bytes
-        image_bytes = await image.read()
+        token = await get_spotify_token()
+        if not token:
+            return None
         
-        if USE_AI_SERVICE:
-            # Validate image
-            if not ImageProcessor.validate_image(image_bytes):
-                raise HTTPException(status_code=400, detail="Invalid image format")
+        async with httpx.AsyncClient() as client:
+            headers = {'Authorization': f'Bearer {token}'}
             
-            # Get image information
-            image_info = ImageProcessor.get_image_info(image_bytes)
-            image_hash = ImageProcessor.calculate_image_hash(image_bytes)
+            response = await client.get(
+                'https://api.spotify.com/v1/search',
+                headers=headers,
+                params={
+                    'q': query,
+                    'type': 'track',
+                    'limit': limit,
+                    'market': 'US'
+                },
+                timeout=10.0
+            )
             
-            # Preprocess for BLIP-2
-            processed_bytes = ImageProcessor.preprocess_for_blip2(image_bytes)
-            
-            # Extract dominant colors
-            try:
-                dominant_colors = ImageProcessor.extract_dominant_colors(image_bytes)
-            except Exception as e:
-                dominant_colors = {"error": f"Color extraction failed: {str(e)}"}
-        else:
-            # Use simple analyzer
-            analysis = image_analyzer.analyze_image(image_bytes)
-            image_info = {"size": "unknown", "format": "unknown"}
-            image_hash = hashlib.md5(image_bytes).hexdigest()
-            processed_bytes = image_bytes  # No preprocessing
-            dominant_colors = analysis.get("colors", {})
-        
-        processing_time = time.time() - start_time
-        
-        return {
-            "success": True,
-            "original_image": {
-                "filename": image.filename,
-                "size": image_info.get("size"),
-                "format": image_info.get("format"),
-                "file_size": len(image_bytes),
-                "hash": image_hash
-            },
-            "processed_image": {
-                "file_size": len(processed_bytes),
-                "compression_ratio": round(len(processed_bytes) / len(image_bytes), 3) if image_bytes else 1.0
-            },
-            "dominant_colors": dominant_colors,
-            "processing_time_seconds": round(processing_time, 3),
-            "timestamp": time.time(),
-            "service_used": "ai" if USE_AI_SERVICE else "simple"
-        }
-        
-    except HTTPException:
-        raise
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Spotify search failed: {response.status_code}")
+                return None
+                
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
+        print(f"Search error for '{query}': {e}")
+        return None
 
-@app.post("/caption/batch")
-async def generate_batch_captions(
-    images: list[UploadFile] = File(..., description="List of image files")
-) -> Dict[str, Any]:
-    """Generate captions for multiple images in batch (AI service or fallback)."""
-    if len(images) > 10:  # Limit batch size
-        raise HTTPException(status_code=400, detail="Maximum 10 images per batch")
+def _generate_mood_based_queries(mood: str, caption: str) -> List[str]:
+    """Generate simple mood-based queries for fallback"""
+    mood_queries = {
+        "happy": ["happy songs", "upbeat music", "feel good playlist"],
+        "peaceful": ["calm music", "relaxing songs", "peaceful playlist"],
+        "energetic": ["energetic music", "workout songs", "high energy playlist"],
+        "melancholic": ["sad songs", "emotional music", "melancholy playlist"],
+        "romantic": ["love songs", "romantic music", "romantic playlist"],
+        "nature": ["nature sounds", "acoustic music", "outdoor playlist"],
+        "neutral": ["popular music", "top songs", "trending playlist"]
+    }
     
-    start_time = time.time()
-    results = []
+    return mood_queries.get(mood, mood_queries["neutral"])
+
+def _get_fallback_songs_for_analysis(music_profile: Dict[str, Any], mood: str) -> List[Dict[str, Any]]:
+    """Get fallback songs for enhanced analysis when Spotify is unavailable"""
     
-    try:
-        # Read all images
-        image_bytes_list = []
-        for img in images:
-            if img.content_type not in settings.ALLOWED_IMAGE_TYPES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unsupported image type in {img.filename}"
-                )
-            
-            bytes_data = await img.read()
-            if len(bytes_data) > settings.MAX_IMAGE_SIZE:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Image {img.filename} too large"
-                )
-            
-            image_bytes_list.append(bytes_data)
-        
-        # Generate captions
-        if USE_AI_SERVICE:
-            # Use AI service for batch processing
-            captions = await blip2_service.batch_generate_captions(image_bytes_list)
-        else:
-            # Use simple analyzer for each image
-            captions = []
-            for image_bytes in image_bytes_list:
-                analysis = image_analyzer.analyze_image(image_bytes)
-                captions.append(analysis.get("caption", "a beautiful scene"))
-        
-        # Prepare results
-        for i, (img, caption) in enumerate(zip(images, captions)):
-            results.append({
-                "filename": img.filename,
-                "caption": caption,
-                "index": i
+    if not music_profile or not music_profile.get("recommended_genres"):
+        return _get_fallback_songs_by_mood(mood)
+    
+    # Filter songs based on the generated music profile
+    recommended_genres = music_profile["recommended_genres"]
+    matched_songs = []
+    
+    for song in QUIZ_SONGS:
+        song_genres = [g.lower() for g in song["genres"]]
+        if any(genre.lower() in " ".join(song_genres) for genre in recommended_genres):
+            matched_songs.append({
+                "id": song["id"],
+                "name": song["title"],
+                "artist": song["artist"],
+                "preview_url": song["preview_url"],
+                "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+                "image": song["album_cover"],
+                "query_used": f"genre:{', '.join(recommended_genres)}"
             })
+    
+    # If not enough matches, add some random ones
+    if len(matched_songs) < 10:
+        remaining_songs = [s for s in QUIZ_SONGS if s["id"] not in [ms["id"] for ms in matched_songs]]
+        additional = random.sample(remaining_songs, min(10 - len(matched_songs), len(remaining_songs)))
         
-        total_time = time.time() - start_time
+        for song in additional:
+            matched_songs.append({
+                "id": song["id"],
+                "name": song["title"],
+                "artist": song["artist"],
+                "preview_url": song["preview_url"],
+                "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+                "image": song["album_cover"],
+                "query_used": "fallback"
+            })
+    
+    return matched_songs
+
+def _get_fallback_songs_by_mood(mood: str) -> List[Dict[str, Any]]:
+    """Get fallback songs by mood when Spotify is unavailable"""
+    
+    mood_song_count = {
+        "happy": 6,
+        "energetic": 6,
+        "peaceful": 4,
+        "melancholic": 4,
+        "romantic": 4,
+        "nature": 4
+    }
+    
+    count = mood_song_count.get(mood, 5)
+    selected_songs = random.sample(QUIZ_SONGS, min(count, len(QUIZ_SONGS)))
+    
+    return [{
+        "id": song["id"],
+        "name": song["title"],
+        "artist": song["artist"],
+        "preview_url": song["preview_url"],
+        "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+        "image": song["album_cover"]
+    } for song in selected_songs]
+
+def _get_fallback_recommendations(mood: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Get fallback recommendations when Spotify is not available"""
+    
+    # Use our quiz songs as recommendations
+    mood_songs = []
+    
+    if user_profile and user_profile.get("genre_preferences"):
+        # Filter songs based on user preferences
+        genre_prefs = user_profile["genre_preferences"]
+        top_genres = [genre for genre, score in genre_prefs.items() if score > 0.5]
+        
+        for song in QUIZ_SONGS:
+            if any(genre in song["genres"] for genre in top_genres):
+                mood_songs.append({
+                    "id": song["id"],
+                    "title": song["title"],
+                    "artist": song["artist"],
+                    "album": song["album"],
+                    "preview_url": song["preview_url"],
+                    "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+                    "album_cover": song["album_cover"],
+                    "popularity": 75,  # Default popularity
+                    "duration_ms": 180000,  # Default 3 minutes
+                    "explicit": False
+                })
+    else:
+        # Use mood-based filtering
+        mood_song_count = {
+            "happy": 4,
+            "energetic": 4,
+            "peaceful": 3,
+            "melancholic": 3,
+            "romantic": 3,
+            "nature": 3
+        }
+        
+        count = mood_song_count.get(mood, 4)
+        selected_songs = random.sample(QUIZ_SONGS, min(count, len(QUIZ_SONGS)))
+        
+        for song in selected_songs:
+            mood_songs.append({
+                "id": song["id"],
+                "title": song["title"],
+                "artist": song["artist"],
+                "album": song["album"],
+                "preview_url": song["preview_url"],
+                "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+                "album_cover": song["album_cover"],
+                "popularity": 75,
+                "duration_ms": 180000,
+                "explicit": False
+            })
+    
+    return {
+        "success": True,
+        "mood": mood,
+        "recommendations": mood_songs[:6],  # Limit to 6 recommendations
+        "search_strategy": "fallback_local",
+        "total_found": len(mood_songs),
+        "personalized": bool(user_profile),
+        "note": "Using local song database (Spotify search unavailable)"
+    }
+
+# Search endpoint for additional functionality
+@app.get("/search/songs")
+async def search_songs(
+    query: str = Query(..., description="Search query for songs"),
+    limit: int = Query(10, ge=1, le=50, description="Number of results to return")
+) -> Dict[str, Any]:
+    """Search for songs using Spotify API"""
+    
+    token = await get_spotify_token()
+    if not token:
+        print(f"⚠️ Spotify search unavailable, using local fallback for query: {query}")
+        # Fallback to searching local quiz songs
+        query_lower = query.lower()
+        matching_songs = []
+        
+        for song in QUIZ_SONGS:
+            # Simple text matching
+            if (query_lower in song["title"].lower() or 
+                query_lower in song["artist"].lower() or
+                any(query_lower in genre.lower() for genre in song["genres"])):
+                matching_songs.append({
+                    "id": song["id"],
+                    "name": song["title"],
+                    "artist": song["artist"],
+                    "preview_url": song["preview_url"],
+                    "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+                    "image": song["album_cover"],
+                    "album": song["album"],
+                    "genres": song["genres"]
+                })
+        
+        # If no matches, return random songs
+        if not matching_songs:
+            matching_songs = [{
+                "id": song["id"],
+                "name": song["title"],
+                "artist": song["artist"],
+                "preview_url": song["preview_url"],
+                "spotify_url": f"https://open.spotify.com/track/{song['id']}",
+                "image": song["album_cover"],
+                "album": song["album"],
+                "genres": song["genres"]
+            } for song in random.sample(QUIZ_SONGS, min(limit, len(QUIZ_SONGS)))]
         
         return {
             "success": True,
-            "results": results,
-            "batch_info": {
-                "total_images": len(images),
-                "total_time_seconds": round(total_time, 3),
-                "average_time_per_image": round(total_time / len(images), 3)
-            },
-            "timestamp": time.time(),
-            "service_used": "ai" if USE_AI_SERVICE else "simple"
+            "query": query,
+            "results": matching_songs[:limit],
+            "total_found": len(matching_songs),
+            "search_type": "local_fallback",
+            "note": "Using local song database (Spotify search unavailable)"
         }
-        
-    except HTTPException:
-        raise
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {'Authorization': f'Bearer {token}'}
+            
+            response = await client.get(
+                'https://api.spotify.com/v1/search',
+                headers=headers,
+                params={
+                    'q': query,
+                    'type': 'track',
+                    'limit': limit,
+                    'market': 'US'
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                tracks = data['tracks']['items']
+                
+                results = []
+                for track in tracks:
+                    results.append({
+                        "id": track['id'],
+                        "title": track['name'],
+                        "artist": track['artists'][0]['name'],
+                        "album": track['album']['name'],
+                        "preview_url": track.get('preview_url'),
+                        "spotify_url": track['external_urls']['spotify'],
+                        "album_cover": track['album']['images'][0]['url'] if track['album']['images'] else None,
+                        "popularity": track['popularity'],
+                        "duration_ms": track['duration_ms'],
+                        "explicit": track['explicit'],
+                        "release_date": track['album']['release_date']
+                    })
+                
+                return {
+                    "success": True,
+                    "query": query,
+                    "results": results,
+                    "total_found": len(results),
+                    "has_previews": sum(1 for r in results if r["preview_url"] is not None)
+                }
+            else:
+                raise HTTPException(status_code=response.status_code, detail="Spotify search failed")
+                
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
-
-async def log_processing_metrics(
-    image_hash: str,
-    caption_time: float,
-    total_time: float,
-    file_size: int
-):
-    """Background task to log processing metrics."""
-    # This would typically log to a database or monitoring system
-    print(f"METRICS: hash={image_hash[:8]}, caption_time={caption_time:.3f}s, "
-          f"total_time={total_time:.3f}s, file_size={file_size}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 # Error handlers
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Global exception handler."""
+    """Global exception handler"""
     return JSONResponse(
         status_code=500,
         content={
@@ -1074,12 +1531,12 @@ if __name__ == "__main__":
     
     print(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     print(f"Debug mode: {settings.DEBUG}")
-    print(f"GPU enabled: {getattr(settings, 'USE_GPU', False)}")
     print(f"AI Service: {USE_AI_SERVICE}")
-    print(f"Spotify OAuth: {bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET)}")
+    print(f"Spotify Client Credentials: {bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET)}")
+    print(f"Quiz songs available: {len(QUIZ_SONGS)}")
     
     uvicorn.run(
-        "main:app",
+        "main_quiz:app",
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
