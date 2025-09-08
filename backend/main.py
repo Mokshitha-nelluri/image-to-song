@@ -1382,31 +1382,31 @@ def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, An
         }
     }
     
-    # Scene-appropriate genre searches with balanced user integration
+    # Scene-appropriate genre searches with POPULAR song emphasis
     scene_based_strategies = {
         "happy": [
-            "genre:pop", "genre:indie-pop", "feel good",
-            "upbeat positive", "cheerful", "sunny"
+            "genre:pop", "genre:indie-pop", "pop cheerful",
+            "feel good hits", "upbeat popular", "sunny pop"
         ],
         "peaceful": [
-            "genre:ambient", "genre:folk", "genre:acoustic",
-            "calm peaceful", "nature sounds", "meditation"
+            "genre:indie", "genre:acoustic", "genre:folk",
+            "chill popular", "peaceful indie", "acoustic hits"
         ],
         "energetic": [
-            "genre:electronic", "genre:dance", "genre:rock",
-            "high energy", "workout", "pump up"
+            "genre:rock", "genre:electronic", "genre:dance",
+            "high energy hits", "workout popular", "rock anthems"
         ],
         "melancholic": [
-            "genre:indie", "genre:alternative", "genre:singer-songwriter",
-            "introspective", "contemplative", "emotional"
+            "genre:indie", "genre:alternative", "genre:acoustic",
+            "indie popular", "alternative hits", "emotional popular"
         ],
         "romantic": [
-            "genre:r-n-b", "genre:soul", "genre:acoustic",
-            "love songs", "romantic", "intimate"
+            "genre:pop", "genre:r-n-b", "genre:acoustic",
+            "love song hits", "romantic popular", "soul ballads"
         ],
         "nature": [
-            "genre:folk", "genre:indie-folk", "genre:acoustic",
-            "nature organic", "earthy", "environmental"
+            "genre:indie", "genre:folk", "genre:acoustic",
+            "folk popular", "indie nature", "acoustic popular"
         ]
     }
     
@@ -1478,31 +1478,31 @@ def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str, audi
     # Define mood preferences for ranking
     mood_preferences = {
         "happy": {
-            "min_popularity": 30,
+            "min_popularity": 50,  # Increased from 30
             "prefer_recent": True,
             "avoid_explicit": True,
             "duration_range": (120000, 300000)  # 2-5 minutes
         },
         "melancholic": {
-            "min_popularity": 20,
+            "min_popularity": 40,  # Increased from 20
             "prefer_recent": False,
             "avoid_explicit": False,
             "duration_range": (180000, 360000)  # 3-6 minutes
         },
         "energetic": {
-            "min_popularity": 40,
+            "min_popularity": 60,  # Increased from 40
             "prefer_recent": True,
             "avoid_explicit": False,
             "duration_range": (150000, 300000)  # 2.5-5 minutes
         },
         "peaceful": {
-            "min_popularity": 15,
+            "min_popularity": 45,  # Increased from 15
             "prefer_recent": False,
             "avoid_explicit": True,
             "duration_range": (180000, 420000)  # 3-7 minutes
         },
         "romantic": {
-            "min_popularity": 25,
+            "min_popularity": 50,  # Increased from 25
             "prefer_recent": False,
             "avoid_explicit": True,
             "duration_range": (200000, 360000)  # 3-6 minutes
@@ -1515,10 +1515,14 @@ def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str, audi
     for track in tracks:
         score = 0
         
-        # Popularity score (0-40 points)
+        # POPULARITY SCORE - Much more important now (0-60 points instead of 40)
         popularity = track.get("popularity", 0)
         if popularity >= preferences["min_popularity"]:
-            score += min(popularity * 0.4, 40)
+            score += min(popularity * 0.6, 60)  # Increased weight
+        elif popularity >= 30:  # Give partial credit for moderately popular
+            score += popularity * 0.3
+        else:
+            score -= 20  # Penalty for very low popularity
         
         # Duration score (0-20 points)
         duration = track.get("duration_ms", 0)
@@ -1549,23 +1553,27 @@ def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str, audi
         if any(word in title_lower for word in literal_mood_words):
             score -= 25  # Heavy penalty for literal mood words
         
-        # Avoid artists with literal mood words or audio feature terms
+        # Avoid artists with literal mood words or niche ambient terms
         artist_name = track.get("artist", "").lower()
-        if any(word in artist_name for word in literal_mood_words):
-            score -= 30  # Even heavier penalty for artists with literal terms
+        niche_terms = ["ambient", "meditation", "spa", "zen", "chakra", "healing", "new age", "nature sounds"]
+        if any(word in artist_name for word in literal_mood_words + niche_terms):
+            score -= 40  # Heavy penalty for niche/literal artists
         
-        # Bonus for real artists (not generic background music)
-        generic_terms = ["background", "instrumental", "meditation", "royalty free", "stock", "karaoke"]
+        # Bonus for real popular artists (not generic background music)
+        generic_terms = ["background", "instrumental", "meditation", "royalty free", "stock", "karaoke", "sleep", "relax"]
         if not any(term in artist_name for term in generic_terms):
+            score += 15  # Increased bonus for real artists
+        
+        # Mainstream artist bonus - look for well-known artists
+        mainstream_indicators = ["records", "music", "official", "feat", "ft"]
+        if any(indicator in artist_name for indicator in mainstream_indicators) and popularity > 50:
             score += 10
         
-        # Genre appropriateness bonus
-        # This would ideally use actual Spotify genre data, but we'll use heuristics
-        if mood == "melancholic":
-            # Prefer indie, alternative, singer-songwriter vibes
-            indie_indicators = ["indie", "alternative", "acoustic", "folk"]
-            if any(indicator in artist_name for indicator in indie_indicators):
-                score += 15
+        # Final popularity boost for very popular songs
+        if popularity >= 80:
+            score += 20  # Extra bonus for very popular songs
+        elif popularity >= 70:
+            score += 10  # Bonus for popular songs
         
         scored_tracks.append((score, track))
     
