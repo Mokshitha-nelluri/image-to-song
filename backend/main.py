@@ -1236,104 +1236,113 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Recommendations failed: {str(e)}")
 
 def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Build intelligent search parameters using Spotify's audio features and dynamic genre searches"""
+    """Build intelligent search parameters using genre-based searches and audio feature filtering"""
     
-    # Map moods to Spotify audio features (0.0 to 1.0 scale)
+    # Audio features for post-search filtering (not search queries)
     mood_audio_features = {
         "happy": {
-            "valence": "0.7..1.0",        # High positivity
-            "energy": "0.6..1.0",         # High energy
-            "danceability": "0.6..1.0",   # Danceable
-            "tempo": "120..180",          # Upbeat tempo
-            "mode": "1",                  # Major key (1) vs Minor (0)
+            "target_valence": (0.6, 1.0),
+            "target_energy": (0.5, 1.0),
+            "target_danceability": (0.5, 1.0),
+            "target_tempo": (100, 180),
         },
         "peaceful": {
-            "valence": "0.3..0.7",        # Neutral to positive
-            "energy": "0.0..0.4",         # Low energy
-            "acousticness": "0.5..1.0",   # Acoustic
-            "tempo": "60..100",           # Slow tempo
-            "instrumentalness": "0.0..1.0" # Allow instrumental
+            "target_valence": (0.3, 0.7),
+            "target_energy": (0.0, 0.5),
+            "target_acousticness": (0.4, 1.0),
+            "target_tempo": (60, 110),
         },
         "energetic": {
-            "energy": "0.8..1.0",         # Very high energy
-            "danceability": "0.7..1.0",   # Very danceable
-            "tempo": "130..200",          # Fast tempo
-            "loudness": "-5..0",          # Loud
+            "target_energy": (0.7, 1.0),
+            "target_danceability": (0.6, 1.0),
+            "target_tempo": (120, 200),
+            "target_loudness": (-10, 0),
         },
         "melancholic": {
-            "valence": "0.0..0.4",        # Low positivity (sad)
-            "energy": "0.2..0.6",         # Low to medium energy
-            "mode": "0",                  # Minor key
-            "acousticness": "0.3..1.0",   # More acoustic
-            "tempo": "60..120",           # Slower tempo
+            "target_valence": (0.0, 0.4),
+            "target_energy": (0.1, 0.6),
+            "target_acousticness": (0.2, 1.0),
+            "target_tempo": (50, 120),
         },
         "romantic": {
-            "valence": "0.4..0.8",        # Positive but not too upbeat
-            "danceability": "0.3..0.7",   # Moderately danceable
-            "acousticness": "0.4..1.0",   # More acoustic/intimate
-            "energy": "0.3..0.7",         # Medium energy
+            "target_valence": (0.4, 0.8),
+            "target_danceability": (0.3, 0.7),
+            "target_acousticness": (0.3, 1.0),
+            "target_energy": (0.2, 0.7),
         },
         "nature": {
-            "acousticness": "0.7..1.0",   # Very acoustic
-            "instrumentalness": "0.3..1.0", # Allow instrumental
-            "energy": "0.2..0.6",         # Calm to medium energy
-            "valence": "0.4..0.8",        # Peaceful positive
+            "target_acousticness": (0.6, 1.0),
+            "target_instrumentalness": (0.2, 1.0),
+            "target_energy": (0.1, 0.6),
+            "target_valence": (0.3, 0.8),
         }
     }
     
-    # Dynamic genre searches based on current trends
-    genre_search_strategies = {
-        "happy": ["pop", "dance-pop", "funk", "disco", "reggaeton", "afrobeat"],
-        "peaceful": ["ambient", "new-age", "folk", "indie-folk", "acoustic", "chill"],
-        "energetic": ["electronic", "edm", "rock", "hip-hop", "punk", "metal"],
-        "melancholic": ["indie", "alternative", "singer-songwriter", "blues", "emo"],
-        "romantic": ["r-n-b", "soul", "jazz", "bossa-nova", "love-songs"],
-        "nature": ["folk", "world-music", "ambient", "new-age", "acoustic"]
+    # Genre and keyword searches (ONLY these go to Spotify search)
+    search_strategies = {
+        "happy": [
+            "genre:pop", "genre:dance-pop", "genre:funk", 
+            "upbeat mood:positive", "feel good", "sunshine"
+        ],
+        "peaceful": [
+            "genre:ambient", "genre:new-age", "genre:folk",
+            "calm relaxing", "meditation", "peaceful"
+        ],
+        "energetic": [
+            "genre:electronic", "genre:rock", "genre:hip-hop",
+            "workout pump up", "high energy", "motivation"
+        ],
+        "melancholic": [
+            "genre:indie", "genre:alternative", "genre:blues",
+            "introspective", "contemplative", "reflective"
+        ],
+        "romantic": [
+            "genre:r-n-b", "genre:soul", "genre:acoustic",
+            "love songs", "romantic", "intimate"
+        ],
+        "nature": [
+            "genre:folk", "genre:world-music", "genre:ambient",
+            "acoustic nature", "organic", "earthy"
+        ]
     }
     
     mood_features = mood_audio_features.get(mood, mood_audio_features["happy"])
-    genre_options = genre_search_strategies.get(mood, genre_search_strategies["happy"])
+    search_options = search_strategies.get(mood, search_strategies["happy"])
     
     final_queries = []
     
-    # 1. Search by AUDIO FEATURES (most important)
-    feature_query = " ".join([f"{key}:{value}" for key, value in mood_features.items()])
-    final_queries.append(feature_query)
+    # 1. Search by GENRES (safe for Spotify search)
+    for search_term in search_options[:4]:  # Top 4 search strategies
+        final_queries.append(search_term)
     
-    # 2. Search by GENRES (dynamic, not hardcoded artists)
-    for genre in genre_options[:3]:  # Top 3 genres for this mood
-        final_queries.append(f"genre:{genre}")
-    
-    # 3. Add user preference integration
+    # 2. Add user preference integration
     if user_profile and user_profile.get("genre_preferences"):
         genre_prefs = user_profile["genre_preferences"]
         top_user_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:2]
         
         for genre, score in top_user_genres:
             if score > 0.3:
-                # Combine user genre with mood features
-                user_query = f"genre:{genre} {list(mood_features.items())[0][0]}:{list(mood_features.items())[0][1]}"
-                final_queries.append(user_query)
+                final_queries.append(f"genre:{genre}")
         
-        strategy = "audio_features_personalized"
+        strategy = "genre_personalized_with_audio_filtering"
     else:
-        strategy = "audio_features_based"
+        strategy = "genre_based_with_audio_filtering"
     
-    # 4. Add recent popular songs as fallback
+    # 3. Add recent popular songs as fallback
     final_queries.extend([
-        "year:2020-2024 popularity:60..100",  # Recent popular songs
-        f"year:2015-2024 genre:{genre_options[0]}"  # Genre-specific recent songs
+        "year:2020-2024",  # Recent songs
+        "popularity:50-100"  # Popular songs
     ])
     
     return {
-        "queries": final_queries[:8],
+        "queries": final_queries[:6],
         "strategy": strategy,
-        "audio_features": mood_features,
-        "target_genres": genre_options
+        "audio_filters": mood_features,  # These will be used for POST-search filtering
+        "target_genres": search_options
     }
 
-def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str) -> List[Dict[str, Any]]:
-    """Rank songs based on musical characteristics and mood appropriateness"""
+def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str, audio_filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Rank songs based on musical characteristics and mood appropriateness with audio feature scoring"""
     
     # Define mood preferences for ranking
     mood_preferences = {
@@ -1405,15 +1414,27 @@ def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str) -> L
         
         # Avoid songs with obvious mood words in title (too literal)
         title_lower = track.get("name", "").lower()
-        literal_mood_words = ["sad", "happy", "emotional", "melancholic", "depressed", "joyful"]
+        literal_mood_words = ["sad", "happy", "emotional", "melancholic", "depressed", "joyful", "valence", "valentine"]
         if any(word in title_lower for word in literal_mood_words):
             score -= 25  # Heavy penalty for literal mood words
         
-        # Bonus for real artists (not generic background music)
+        # Avoid artists with literal mood words or audio feature terms
         artist_name = track.get("artist", "").lower()
-        generic_terms = ["background", "instrumental", "meditation", "royalty free", "stock"]
+        if any(word in artist_name for word in literal_mood_words):
+            score -= 30  # Even heavier penalty for artists with literal terms
+        
+        # Bonus for real artists (not generic background music)
+        generic_terms = ["background", "instrumental", "meditation", "royalty free", "stock", "karaoke"]
         if not any(term in artist_name for term in generic_terms):
             score += 10
+        
+        # Genre appropriateness bonus
+        # This would ideally use actual Spotify genre data, but we'll use heuristics
+        if mood == "melancholic":
+            # Prefer indie, alternative, singer-songwriter vibes
+            indie_indicators = ["indie", "alternative", "acoustic", "folk"]
+            if any(indicator in artist_name for indicator in indie_indicators):
+                score += 15
         
         scored_tracks.append((score, track))
     
