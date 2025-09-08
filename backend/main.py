@@ -1258,11 +1258,12 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
         print(f"🔍 Search queries: {search_params['queries']}")
         print(f"📋 Strategy: {search_params['strategy']}")
         
-        recommendations = []
+        # Diversified search strategy - limit tracks per search for variety
+        all_tracks = []
         async with httpx.AsyncClient() as client:
             headers = {'Authorization': f'Bearer {token}'}
             
-            # Search for songs based on combined preferences
+            # Search with multiple diverse parameters
             for search_query in search_params["queries"]:
                 try:
                     print(f"🎯 Searching for: '{search_query}'")
@@ -1272,7 +1273,7 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                         params={
                             'q': search_query,
                             'type': 'track',
-                            'limit': 20,
+                            'limit': 8,  # Reduced limit for diversity
                             'market': 'US'
                         }
                     )
@@ -1281,31 +1282,32 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                         tracks = search_response.json()['tracks']['items']
                         print(f"📀 Found {len(tracks)} tracks for '{search_query}'")
                         
+                        # Limit to max 4 tracks per search for diversity
+                        query_tracks = []
                         tracks_with_preview = 0
-                        tracks_added = 0
-                        for track in tracks:
-                            # Add all tracks, not just those with previews
-                            recommendations.append({
+                        
+                        for track in tracks[:4]:  # Max 4 per search
+                            track_data = {
                                 "id": track['id'],
                                 "title": track['name'],
                                 "artist": track['artists'][0]['name'],
                                 "album": track['album']['name'],
-                                "preview_url": track.get('preview_url'),  # Optional now
+                                "preview_url": track.get('preview_url'),
                                 "spotify_url": track['external_urls']['spotify'],
                                 "album_cover": track['album']['images'][0]['url'] if track['album']['images'] else None,
                                 "popularity": track['popularity'],
                                 "duration_ms": track['duration_ms'],
-                                "explicit": track['explicit']
-                            })
-                            tracks_added += 1
+                                "explicit": track['explicit'],
+                                "search_type": search_query[:20]  # Track which search found this
+                            }
+                            query_tracks.append(track_data)
                             
                             if track.get('preview_url'):
                                 tracks_with_preview += 1
                         
-                        print(f"🎵 Added {tracks_added} tracks ({tracks_with_preview} with previews)")
+                        all_tracks.extend(query_tracks)
+                        print(f"🎵 Added {len(query_tracks)} tracks ({tracks_with_preview} with previews)")
                         
-                        if len(recommendations) >= 10:  # Got enough recommendations
-                            break
                     else:
                         print(f"❌ Spotify search failed: {search_response.status_code}")
                             
@@ -1313,26 +1315,19 @@ async def get_recommendations(request: Dict[str, Any]) -> Dict[str, Any]:
                     print(f"❌ Search query failed: {search_query}, error: {e}")
                     continue
         
-        # Remove duplicates and limit results
-        seen_ids = set()
-        unique_recommendations = []
-        for rec in recommendations:
-            if rec["id"] not in seen_ids:
-                seen_ids.add(rec["id"])
-                unique_recommendations.append(rec)
-                if len(unique_recommendations) >= 8:
-                    break
+        # Apply diversified selection algorithm
+        recommendations = _diversified_track_selection(all_tracks)
         
-        print(f"✅ Final recommendations: {len(unique_recommendations)}")
+        print(f"✅ Diversified final recommendations: {len(recommendations)}")
         
         # Always return what we found, no minimum threshold needed
         return {
             "success": True,
             "mood": mood,
             "caption": caption,
-            "recommendations": unique_recommendations,
-            "search_strategy": search_params["strategy"],
-            "total_found": len(unique_recommendations),
+            "recommendations": recommendations,
+            "search_strategy": f"{search_params['strategy']} + diversified",
+            "total_found": len(recommendations),
             "personalized": bool(user_profile)
         }
         
@@ -1382,31 +1377,31 @@ def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, An
         }
     }
     
-    # Scene-appropriate genre searches with POPULAR song emphasis
+    # Scene-appropriate genre searches with DISTINCT mood-specific strategies
     scene_based_strategies = {
         "happy": [
-            "genre:pop", "genre:indie-pop", "pop cheerful",
+            "genre:pop", "genre:dance-pop", "pop cheerful",
             "feel good hits", "upbeat popular", "sunny pop"
         ],
         "peaceful": [
-            "genre:indie", "genre:acoustic", "genre:folk",
-            "chill popular", "peaceful indie", "acoustic hits"
+            "genre:folk", "genre:acoustic", "peaceful indie",
+            "calm acoustic", "folk popular", "nature acoustic"
         ],
         "energetic": [
             "genre:rock", "genre:electronic", "genre:dance",
             "high energy hits", "workout popular", "rock anthems"
         ],
         "melancholic": [
-            "genre:indie", "genre:alternative", "genre:acoustic",
-            "indie popular", "alternative hits", "emotional popular"
+            "genre:alternative", "genre:indie-rock", "emotional indie",
+            "sad alternative", "melancholic popular", "introspective hits"
         ],
         "romantic": [
             "genre:pop", "genre:r-n-b", "genre:acoustic",
             "love song hits", "romantic popular", "soul ballads"
         ],
         "nature": [
-            "genre:indie", "genre:folk", "genre:acoustic",
-            "folk popular", "indie nature", "acoustic popular"
+            "genre:folk", "genre:indie-folk", "acoustic nature",
+            "folk popular", "organic acoustic", "nature indie"
         ]
     }
     
@@ -1416,9 +1411,9 @@ def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, An
     final_queries = []
     
     # 1. Prioritize SCENE-APPROPRIATE genres (most important for context)
-    final_queries.extend(scene_searches[:3])  # Top 3 scene-based searches
+    final_queries.extend(scene_searches[:4])  # Top 4 scene-based searches for variety
     
-    # 2. Balanced user preference integration (limited influence)
+    # 2. Minimal user preference integration (limited influence)
     if user_profile and user_profile.get("genre_preferences"):
         genre_prefs = user_profile["genre_preferences"]
         top_user_genres = sorted(genre_prefs.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -1426,21 +1421,27 @@ def _build_search_parameters(mood: str, caption: str, user_profile: Dict[str, An
         # Add user genres but keep scene context dominant
         user_genre_count = 0
         for genre, score in top_user_genres:
-            if score > 0.4 and user_genre_count < 2:  # Limit to 2 user genres max
+            if score > 0.5 and user_genre_count < 1:  # Only 1 user genre max, higher threshold
                 # Check if user genre is compatible with scene mood
                 if _is_genre_mood_compatible(genre, mood):
                     final_queries.append(f"genre:{genre}")
                     user_genre_count += 1
         
-        strategy = "scene_balanced_personalized"
+        strategy = "scene_dominated_personalized"
     else:
-        strategy = "scene_based_with_audio_filtering"
+        strategy = "pure_scene_based"
     
-    # 3. Add scene-appropriate popular songs as fallback
-    final_queries.extend([
-        f"year:2020-2024 {scene_searches[0].split()[0] if ' ' in scene_searches[0] else scene_searches[0]}",
-        "year:2018-2024 popularity:60-100"
-    ])
+    # 3. Add mood-specific popular songs as variety
+    mood_specific_queries = {
+        "peaceful": ["acoustic popular", "folk hits"],
+        "melancholic": ["alternative popular", "indie emotional"],
+        "happy": ["pop hits", "feel good popular"],
+        "energetic": ["rock popular", "electronic hits"],
+        "romantic": ["love song hits", "r&b popular"]
+    }
+    
+    specific_queries = mood_specific_queries.get(mood, ["popular music"])
+    final_queries.extend(specific_queries[:2])  # Add 2 mood-specific queries
     
     return {
         "queries": final_queries[:7],  # Balanced query count
@@ -1574,6 +1575,34 @@ def _rank_songs_by_characteristics(tracks: List[Dict[str, Any]], mood: str, audi
             score += 20  # Extra bonus for very popular songs
         elif popularity >= 70:
             score += 10  # Bonus for popular songs
+        
+        # MOOD-SPECIFIC GENRE BONUSES for better differentiation
+        if mood == "peaceful":
+            # Bonus for folk/acoustic artists and nature-themed content
+            peaceful_keywords = ["folk", "acoustic", "nature", "calm", "serene"]
+            if any(keyword in artist_name or keyword in title_lower for keyword in peaceful_keywords):
+                score += 15
+            # Prefer slower, more mellow tracks
+            if duration > 240000:  # Longer than 4 minutes
+                score += 10
+                
+        elif mood == "melancholic":
+            # Bonus for alternative/indie-rock and emotional content
+            melancholic_keywords = ["alternative", "indie", "emotional", "sad", "melancholy"]
+            if any(keyword in artist_name for keyword in ["alternative", "indie"]):
+                score += 15
+            # Prefer medium duration emotional tracks
+            if 180000 <= duration <= 300000:  # 3-5 minutes
+                score += 10
+                
+        elif mood == "happy":
+            # Bonus for pop/dance artists and upbeat content
+            happy_keywords = ["pop", "dance", "upbeat", "happy"]
+            if any(keyword in artist_name for keyword in ["pop", "dance"]):
+                score += 15
+            # Prefer shorter, punchier tracks
+            if 120000 <= duration <= 240000:  # 2-4 minutes
+                score += 10
         
         scored_tracks.append((score, track))
     
@@ -1762,6 +1791,70 @@ def _get_fallback_recommendations(mood: str, user_profile: Dict[str, Any]) -> Di
         "personalized": bool(user_profile),
         "note": "Using local song database (Spotify search unavailable)"
     }
+
+def _diversified_track_selection(all_tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Select diverse tracks from multiple search results to prevent duplicates.
+    Ensures variety across different search types and artists.
+    """
+    if not all_tracks:
+        return []
+    
+    # Remove exact duplicates by track ID
+    seen_ids = set()
+    unique_tracks = []
+    for track in all_tracks:
+        if track["id"] not in seen_ids:
+            seen_ids.add(track["id"])
+            unique_tracks.append(track)
+    
+    # Group tracks by search type for balanced selection
+    search_type_groups = {}
+    for track in unique_tracks:
+        search_type = track.get("search_type", "unknown")
+        if search_type not in search_type_groups:
+            search_type_groups[search_type] = []
+        search_type_groups[search_type].append(track)
+    
+    # Select tracks with artist diversity
+    final_recommendations = []
+    seen_artists = set()
+    max_per_artist = 2  # Limit tracks per artist
+    
+    # Round-robin selection from different search types
+    search_types = list(search_type_groups.keys())
+    search_index = 0
+    
+    while len(final_recommendations) < 8 and any(search_type_groups.values()):
+        # Get current search type
+        current_search_type = search_types[search_index % len(search_types)]
+        tracks_for_type = search_type_groups[current_search_type]
+        
+        if tracks_for_type:
+            # Find a track from a new artist or one we haven't overused
+            track_added = False
+            for track in tracks_for_type[:]:  # Copy list to modify during iteration
+                artist = track["artist"].lower()
+                artist_count = sum(1 for t in final_recommendations if t["artist"].lower() == artist)
+                
+                if artist_count < max_per_artist:
+                    final_recommendations.append(track)
+                    tracks_for_type.remove(track)
+                    track_added = True
+                    break
+            
+            # If no suitable track found, move to next search type
+            if not track_added:
+                search_type_groups[current_search_type] = []  # Mark as exhausted
+        
+        search_index += 1
+    
+    print(f"🎯 Diversified selection: {len(final_recommendations)} tracks from {len(search_type_groups)} search types")
+    
+    # Sort by popularity for better user experience
+    final_recommendations.sort(key=lambda x: x.get("popularity", 0), reverse=True)
+    
+    return final_recommendations[:8]  # Return max 8 tracks
 
 # Search endpoint for additional functionality
 @app.get("/search/songs")
