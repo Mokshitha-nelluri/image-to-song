@@ -24,7 +24,7 @@ Music enthusiasts who want to discover new songs that match both their taste and
 *The following screens demonstrate the complete user journey:*
 
 ### 1. Interactive Music Quiz
-![Music Quiz](images/quiz.jpg)
+<img src="images/quiz.jpg" alt="Music Quiz" width="180">
 
 **Tinder-Style Song Rating:**
 - 20 carefully curated songs across diverse genres
@@ -34,7 +34,7 @@ Music enthusiasts who want to discover new songs that match both their taste and
 - Audio features analysis for each rating
 
 ### 2. Personality & Analytics Dashboard  
-![Music Personality](images/personality_stats.jpg)
+<img src="images/personality_stats.jpg" alt="Music Personality" width="180">
 
 **Personalized Insights:**
 - Generated music personality profile
@@ -44,7 +44,7 @@ Music enthusiasts who want to discover new songs that match both their taste and
 - Preference strength visualizations
 
 ### 3. Main Home Screen
-![Home Screen](images/home.jpg)
+<img src="images/home.jpg" alt="Home Screen" width="180">
 
 **Central Hub:**
 - Clean, intuitive interface design
@@ -54,7 +54,7 @@ Music enthusiasts who want to discover new songs that match both their taste and
 - Beautiful gradient styling with Spotify branding
 
 ### 4. Image Upload & Analysis
-![Image Upload](images/upload.jpg)
+<img src="images/upload.jpg" alt="Image Upload" width="180">
 
 **Smart Image Processing:**
 - Camera capture or gallery selection
@@ -64,7 +64,7 @@ Music enthusiasts who want to discover new songs that match both their taste and
 - Confidence scoring for recommendations
 
 ### 5. Personalized Recommendations
-![Song Recommendations](images/recommendations.jpg)
+<img src="images/recommendations.jpg" alt="Song Recommendations" width="180">
 
 **Intelligent Song Discovery:**
 - Hybrid recommendations combining user taste + image mood
@@ -145,48 +145,6 @@ image-to-song/
     ├── upload.jpg                   # Image upload flow
     └── recommendations.jpg          # Results display
 ```
-
----
-
-## Core Technologies & Implementation Details
-
-### Frontend Stack (Flutter)
-```yaml
-Key Dependencies:
-  • Flutter SDK: Cross-platform mobile framework
-  • shared_preferences: ^2.2.2 - Local key-value storage
-  • audioplayers: ^5.2.1 - Song preview playback
-  • provider: ^6.1.1 - State management
-  • http: ^1.1.0 - API communication
-  • image_picker: ^1.0.4 - Camera/gallery integration
-  • cached_network_image: ^3.3.0 - Image caching
-  • url_launcher: ^6.2.1 - Spotify deep links
-```
-
-**Architecture Decisions:**
-- **Provider Pattern** for state management (lightweight & reactive)
-- **SharedPreferences** for user data persistence (simple & secure)
-- **Centralized Configuration** in `config.dart` for environment switching
-- **Service Layer Pattern** for clean separation of concerns
-
-### Backend Stack (FastAPI)
-```python
-Key Dependencies:
-  • FastAPI: Modern async web framework
-  • PyTorch + Transformers: BLIP-2 model integration
-  • Spotipy: Spotify Web API client
-  • Pillow: Image processing pipeline
-  • Uvicorn: ASGI server for production
-```
-
-**Architecture Decisions:**
-- **Async/Await** throughout for scalability
-- **Router-based organization** for clean API structure
-- **Dependency injection** for service management
-- **Graceful degradation** with fallback systems
-
----
-
 ## AI & Machine Learning Implementation
 
 ### 1. Image Analysis Pipeline
@@ -365,16 +323,7 @@ class ProfileService {
         : null;
   }
 }
-```
 
-**Privacy Benefits:**
-- No cloud storage or external databases
-- No user accounts or authentication 
-- Data stays on user's device
-- Complete data deletion available
-- No tracking or analytics
-
----
 
 ## Deployment & DevOps
 
@@ -394,156 +343,3 @@ services:
         sync: false               # Manual environment variable
 ```
 
-**Deployment Features:**
-- **Auto-scaling** based on traffic
-- **Memory optimization** for free tier
-- **Environment-based AI model loading**
-- **Graceful startup and shutdown**
-
-### Mobile App Distribution
-```bash
-# Android Release Build
-flutter build apk --release --target-platform android-arm64
-
-# iOS Release Build  
-flutter build ios --release
-
-# App size optimization
-flutter build apk --split-per-abi --target-platform android-arm64
-```
-
----
-
-## Testing & Quality Assurance
-
-### Backend Testing
-```python
-# Test files included:
-• test_recommendations.py      # Recommendation engine testing
-• test_enhanced_recommendations.py  # Advanced algorithm testing  
-• test_mobile_connection.py    # Mobile API compatibility
-• test_end_to_end.py          # Complete user flow testing
-```
-
-### Testing Strategies
-```python
-def test_recommendation_engine():
-    """Test hybrid recommendation algorithm"""
-    # Mock user profile with preferences
-    user_profile = create_test_profile()
-    
-    # Mock image analysis result
-    image_analysis = {"mood": "energetic", "confidence": 0.9}
-    
-    # Generate recommendations
-    recommendations = generate_recommendations(image_analysis, user_profile)
-    
-    # Assertions
-    assert len(recommendations) > 0
-    assert all(rec.confidence_score > 0.5 for rec in recommendations)
-    assert any("energetic" in rec.match_reasons for rec in recommendations)
-```
-
-### Performance Benchmarks
-- **API Response Time**: < 2 seconds for image analysis
-- **Model Loading**: ~15 seconds for BLIP-2 initialization  
-- **Memory Usage**: 512MB baseline + 1.3GB model
-- **Mobile App Size**: ~25MB APK (optimized)
-
----
-
-## Key Technical Achievements
-
-### 1. **Intelligent AI Architecture**
-- **Multi-model approach**: BLIP-2 with color-based fallback
-- **Memory-aware deployment**: Automatic model selection based on environment
-- **Async processing**: Non-blocking AI inference with thread pools
-
-### 2. **Advanced Recommendation Algorithm**  
-- **Hybrid weighting**: 60% user preference + 40% image mood
-- **Multi-dimensional matching**: Genre, audio features, and mood correlation
-- **Confidence scoring**: Quantified recommendation quality
-
-### 3. **Production-Ready Infrastructure**
-- **Graceful degradation**: App works with or without AI models
-- **Error handling**: Comprehensive fallbacks and user feedback
-- **Scalable architecture**: FastAPI async patterns for concurrent users
-
-### 4. **Privacy-First Design**
-- **Local storage**: No external databases or user accounts
-- **Minimal permissions**: Only camera/gallery access required
-- **GDPR compliant**: No personal data collection or tracking
-
----
-
-## Future Enhancements & Roadmap
-
-### Phase 1: Enhanced Personalization
-- **Learning from feedback**: Like/dislike on recommendations
-- **Temporal preferences**: Different moods throughout the day
-- **Context awareness**: Location-based recommendations
-
-### Phase 2: Social Features  
-- **Playlist creation**: Convert recommendations to Spotify playlists
-- **Music sharing**: Share discoveries with friends
-- **Community insights**: Anonymous preference trends
-
-### Phase 3: Advanced AI
-- **Multi-modal analysis**: Audio analysis of environment sounds
-- **Sentiment analysis**: Text from image (signs, captions)
-- **Real-time processing**: Camera viewfinder recommendations
-
----
-
-## Technical Interview Talking Points
-
-### **Problem Solving**
-- **Challenge**: Free hosting memory limits vs. 1.3GB AI model
-- **Solution**: Intelligent fallback system with environment detection
-- **Result**: App works in all deployment scenarios
-
-### **System Design**  
-- **Challenge**: Balancing personalization without user accounts
-- **Solution**: Local-first architecture with quiz-based learning
-- **Result**: Privacy-compliant personalization at scale
-
-### **Mobile Development**
-- **Challenge**: Seamless audio preview integration
-- **Solution**: AudioService with proper lifecycle management
-- **Result**: Smooth UX with background audio handling
-
-### **API Design**
-- **Challenge**: Multiple recommendation strategies
-- **Solution**: Unified endpoint with strategy selection
-- **Result**: Clean client code with flexible backend logic
-
----
-
-## Code Verification Status
-
-This README has been **verified against the actual codebase** (November 2024) and accurately reflects:
-
-### **Confirmed Features:**
-- **Quiz System**: `/quiz/songs` and `/quiz/calculate-preferences` endpoints working
-- **Image Analysis**: BLIP model integration with color-based fallbacks
-- **Recommendations**: `/analyze-and-recommend` endpoint with Spotify Client Credentials
-- **Mobile App**: Flutter app with welcome → quiz → home → results flow
-- **Local Storage**: SharedPreferences implementation in ProfileService
-- **Audio Playback**: Real AudioService with audioplayers package
-- **Dependencies**: All listed packages match pubspec.yaml exactly
-
-### **Key Architecture Matches:**
-- **No OAuth/Authentication**: Confirmed - pure Client Credentials flow
-- **Privacy-First**: All user data stored locally via SharedPreferences
-- **Hybrid AI**: BLIP + SimpleColorAnalyzer fallback system verified
-- **Quiz-Driven Learning**: 20-song rating system with preference calculation
-
-### **Technical Accuracy:**
-- **API Endpoints**: All routes verified in router files
-- **Data Models**: UserMusicProfile and QuizSong structures match implementation
-- **Service Architecture**: ApiService, ProfileService, AudioService confirmed
-- **Deployment**: Render.com configuration with memory optimization verified
-
----
-
-*This project demonstrates expertise in **full-stack development**, **AI/ML integration**, **mobile app architecture**, and **production deployment** - showcasing both technical depth and practical problem-solving skills.*
