@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:audioplayers/audioplayers.dart' as audioplayers;
+import '../config.dart';
 
 enum PlayerState { playing, paused, stopped, loading, error }
 
@@ -7,20 +9,18 @@ class AudioService {
   factory AudioService() => _instance;
   AudioService._internal();
 
-  // For now, we'll create a simple service that tracks state
-  // In production, this would use the audioplayers package
+  // Real audio player instance
+  final audioplayers.AudioPlayer _audioPlayer = audioplayers.AudioPlayer();
 
   PlayerState _state = PlayerState.stopped;
   String? _currentUrl;
   Duration _position = Duration.zero;
-  Duration _duration = const Duration(seconds: 30); // Default preview length
+  Duration _duration = AppConfig.audioPreviewLength;
 
   final StreamController<PlayerState> _stateController =
       StreamController<PlayerState>.broadcast();
   final StreamController<Duration> _positionController =
       StreamController<Duration>.broadcast();
-
-  Timer? _positionTimer;
 
   // Getters
   PlayerState get state => _state;
@@ -44,19 +44,45 @@ class AudioService {
 
       print('🎵 Playing preview: $url');
 
-      // Simulate loading time
-      await Future.delayed(const Duration(milliseconds: 500));
+      // Set up player event listeners
+      _audioPlayer.onPlayerStateChanged.listen((state) {
+        switch (state) {
+          case audioplayers.PlayerState.playing:
+            _state = PlayerState.playing;
+            _stateController.add(_state);
+            break;
+          case audioplayers.PlayerState.paused:
+            _state = PlayerState.paused;
+            _stateController.add(_state);
+            break;
+          case audioplayers.PlayerState.stopped:
+            _state = PlayerState.stopped;
+            _stateController.add(_state);
+            break;
+          case audioplayers.PlayerState.completed:
+            stop();
+            break;
+          case audioplayers.PlayerState.disposed:
+            _state = PlayerState.stopped;
+            _stateController.add(_state);
+            break;
+        }
+      });
 
-      _state = PlayerState.playing;
-      _position = Duration.zero;
-      _stateController.add(_state);
-      _positionController.add(_position);
+      _audioPlayer.onPositionChanged.listen((position) {
+        _position = position;
+        _positionController.add(_position);
+      });
 
-      // Start position timer
-      _startPositionTimer();
+      _audioPlayer.onDurationChanged.listen((duration) {
+        _duration = duration;
+      });
 
-      // Auto-stop after 30 seconds (preview length)
-      Timer(const Duration(seconds: 30), () {
+      // Play the audio
+      await _audioPlayer.play(audioplayers.UrlSource(url));
+
+      // Auto-stop after preview length
+      Timer(AppConfig.audioPreviewLength, () {
         if (_state == PlayerState.playing && _currentUrl == url) {
           stop();
         }
@@ -72,9 +98,9 @@ class AudioService {
   // Pause playback
   Future<void> pause() async {
     if (_state == PlayerState.playing) {
+      await _audioPlayer.pause();
       _state = PlayerState.paused;
       _stateController.add(_state);
-      _stopPositionTimer();
 
       print('⏸️ Audio paused');
     }
@@ -83,9 +109,9 @@ class AudioService {
   // Resume playback
   Future<void> resume() async {
     if (_state == PlayerState.paused) {
+      await _audioPlayer.resume();
       _state = PlayerState.playing;
       _stateController.add(_state);
-      _startPositionTimer();
 
       print('▶️ Audio resumed');
     }
@@ -94,13 +120,13 @@ class AudioService {
   // Stop playback
   Future<void> stop() async {
     if (_state != PlayerState.stopped) {
+      await _audioPlayer.stop();
       _state = PlayerState.stopped;
       _currentUrl = null;
       _position = Duration.zero;
 
       _stateController.add(_state);
       _positionController.add(_position);
-      _stopPositionTimer();
 
       print('⏹️ Audio stopped');
     }
@@ -118,6 +144,7 @@ class AudioService {
   // Seek to position
   Future<void> seek(Duration position) async {
     if (position <= _duration) {
+      await _audioPlayer.seek(position);
       _position = position;
       _positionController.add(_position);
 
@@ -153,29 +180,9 @@ class AudioService {
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
-  void _startPositionTimer() {
-    _stopPositionTimer();
-    _positionTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (_state == PlayerState.playing) {
-        _position = Duration(milliseconds: _position.inMilliseconds + 100);
-        _positionController.add(_position);
-
-        // Stop at end of preview
-        if (_position >= _duration) {
-          stop();
-        }
-      }
-    });
-  }
-
-  void _stopPositionTimer() {
-    _positionTimer?.cancel();
-    _positionTimer = null;
-  }
-
   // Dispose resources
   void dispose() {
-    _stopPositionTimer();
+    _audioPlayer.dispose();
     _stateController.close();
     _positionController.close();
   }

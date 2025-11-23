@@ -6,8 +6,22 @@ import io
 import hashlib
 from typing import Tuple, Optional
 from PIL import Image, ImageOps
-import cv2
 import numpy as np
+
+# Optional imports with fallbacks
+try:
+    import cv2
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+    print("⚠️ OpenCV not installed - some advanced image processing features will be unavailable")
+
+try:
+    from sklearn.cluster import KMeans
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+    print("⚠️ scikit-learn not installed - advanced color analysis will use fallback methods")
 
 from ..core.config import settings
 
@@ -215,36 +229,69 @@ class ImageProcessor:
             list: List of dominant colors as RGB tuples
         """
         try:
-            # Convert bytes to OpenCV format
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            
-            # Reshape image to be a list of pixels
-            pixels = image.reshape(-1, 3)
-            
-            # Use K-means clustering to find dominant colors
-            from sklearn.cluster import KMeans
-            
-            kmeans = KMeans(n_clusters=num_colors, random_state=42, n_init=10)
-            kmeans.fit(pixels)
-            
-            # Get the colors
-            colors = kmeans.cluster_centers_.astype(int)
-            
-            # Calculate color percentages
-            labels = kmeans.labels_
-            percentages = [(labels == i).sum() / len(labels) for i in range(num_colors)]
+            if HAS_OPENCV and HAS_SKLEARN:
+                # Use advanced method with cv2 and sklearn
+                nparr = np.frombuffer(image_bytes, np.uint8)
+                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                
+                # Reshape image to be a list of pixels
+                pixels = image.reshape(-1, 3)
+                
+                # Use K-means clustering to find dominant colors
+                kmeans = KMeans(n_clusters=num_colors, random_state=42, n_init=10)
+                kmeans.fit(pixels)
+                
+                # Get the colors
+                colors = kmeans.cluster_centers_.astype(int)
+                
+                # Calculate color percentages
+                labels = kmeans.labels_
+                percentages = [(labels == i).sum() / len(labels) for i in range(num_colors)]
+                
+            else:
+                # Fallback method using PIL only
+                image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+                
+                # Get colors using PIL's built-in method
+                image_colors = image.getcolors(maxcolors=256*256*256)
+                if not image_colors:
+                    # If too many colors, resize and try again
+                    image = image.resize((100, 100))
+                    image_colors = image.getcolors(maxcolors=10000)
+                
+                if image_colors:
+                    # Sort by count and take top colors
+                    image_colors.sort(key=lambda x: x[0], reverse=True)
+                    top_colors = image_colors[:num_colors]
+                    
+                    # Calculate total pixels for percentages
+                    total_pixels = sum(count for count, _ in image_colors)
+                    
+                    colors = [color for _, color in top_colors]
+                    percentages = [count / total_pixels for count, _ in top_colors]
+                else:
+                    # Emergency fallback
+                    colors = [(128, 128, 128)] * num_colors
+                    percentages = [1.0 / num_colors] * num_colors
             
             # Combine colors with their percentages
-            color_data = [
-                {
-                    "rgb": (int(color[0]), int(color[1]), int(color[2])),
-                    "hex": f"#{int(color[0]):02x}{int(color[1]):02x}{int(color[2]):02x}",
+            color_data = []
+            for color, percentage in zip(colors, percentages):
+                # Handle different color formats (numpy array vs tuple)
+                try:
+                    if isinstance(color, (list, tuple, np.ndarray)) and len(color) >= 3:
+                        rgb = (int(color[0]), int(color[1]), int(color[2]))
+                    else:
+                        rgb = (128, 128, 128)  # Default gray
+                except (IndexError, TypeError, ValueError):
+                    rgb = (128, 128, 128)  # Default gray on any error
+                    
+                color_data.append({
+                    "rgb": rgb,
+                    "hex": f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}",
                     "percentage": float(percentage)
-                }
-                for color, percentage in zip(colors, percentages)
-            ]
+                })
             
             # Sort by percentage (most dominant first)
             color_data.sort(key=lambda x: x["percentage"], reverse=True)
@@ -283,9 +330,15 @@ class ImageProcessor:
             colors = []
             for x, y in sample_points:
                 rgb = image.getpixel((x, y))
+                # Ensure rgb is a tuple of 3 integers
+                if isinstance(rgb, (tuple, list)) and len(rgb) >= 3:
+                    rgb_tuple = (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+                else:
+                    rgb_tuple = (128, 128, 128)  # Default gray
+                
                 colors.append({
-                    "rgb": rgb,
-                    "hex": f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}",
+                    "rgb": rgb_tuple,
+                    "hex": f"#{rgb_tuple[0]:02x}{rgb_tuple[1]:02x}{rgb_tuple[2]:02x}",
                     "percentage": 0.2  # Equal distribution
                 })
             

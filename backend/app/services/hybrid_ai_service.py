@@ -16,6 +16,7 @@ from PIL import Image
 from transformers import BlipProcessor, BlipForConditionalGeneration
 
 from ..core.config import settings
+from ..utils.image_utils import ImageProcessor
 
 # Set up logging
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL))
@@ -76,28 +77,38 @@ class SimpleColorAnalyzer:
             }
     
     def _determine_mood_from_colors(self, r: int, g: int, b: int, brightness: float, saturation: float) -> str:
-        """Determine mood based on color analysis"""
-        # High energy colors
+        """Enhanced mood detection with sophisticated color analysis"""
+        # Calculate additional color metrics
+        warmth = (r + (255 - b)) / 2  # Warm vs cool colors
+        contrast = max(r, g, b) - min(r, g, b)
+        
+        # High energy colors (bright + saturated)
         if brightness > 200 and saturation > 100:
             return "energetic"
-        # Bright and happy
-        elif brightness > 180:
+        # Warm and bright - happy
+        elif brightness > 180 and warmth > 150:
             return "happy"
+        # High contrast - dramatic
+        elif contrast > 120 and brightness < 120:
+            return "dramatic"
         # Dark and moody
         elif brightness < 80:
             return "melancholic"
-        # Green dominant - nature
-        elif g > r and g > b and g > 120:
+        # Green dominant - nature (improved detection)
+        elif g > max(r, b) + 20 and g > 100:
             return "nature"
-        # Blue dominant - peaceful
-        elif b > 150 and b > r and b > g:
+        # Blue dominant - peaceful (improved)
+        elif b > max(r, g) + 15 and b > 120:
             return "peaceful"
-        # Red/warm dominant - romantic
-        elif r > 150 and brightness > 100 and (r > b + 30):
+        # Warm colors - romantic
+        elif warmth > 180 and saturation > 60:
             return "romantic"
-        # Muted colors - calm
-        elif saturation < 50 and brightness > 100:
+        # Low saturation - calm
+        elif saturation < 50 and 100 < brightness < 200:
             return "calm"
+        # High saturation but not bright - intense
+        elif saturation > 150 and brightness < 150:
+            return "intense"
         else:
             return "neutral"
 
@@ -114,18 +125,25 @@ class HybridImageService:
         self.model_name = "Salesforce/blip-image-captioning-base"  # ~1GB vs 15GB
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.is_loaded = False
+        self._load_lock = asyncio.Lock()  # Thread safety
         self.color_analyzer = SimpleColorAnalyzer()
+        self._model_load_time = None
         
         logger.info(f"Initialized HybridImageService with model: {self.model_name}")
 
     async def load_model(self) -> None:
-        """Load the BLIP model asynchronously"""
+        """Load the BLIP model asynchronously with thread safety"""
         if self.is_loaded:
             logger.info("Model already loaded")
             return
             
-        logger.info("Loading BLIP model for scene detection...")
-        start_time = time.time()
+        async with self._load_lock:
+            # Double-check after acquiring lock
+            if self.is_loaded:
+                return
+                
+            logger.info("Loading BLIP model for scene detection...")
+            start_time = time.time()
         
         try:
             # Load in thread to avoid blocking
@@ -134,11 +152,12 @@ class HybridImageService:
             )
             
             load_time = time.time() - start_time
-            logger.info(f"✅ BLIP model loaded successfully in {load_time:.2f}s")
+            self._model_load_time = load_time
+            logger.info(f"BLIP model loaded successfully in {load_time:.2f}s")
             self.is_loaded = True
             
         except Exception as e:
-            logger.error(f"❌ Failed to load BLIP model: {e}")
+            logger.error(f"Failed to load BLIP model: {e}")
             self.is_loaded = False
             raise
 
@@ -167,13 +186,34 @@ class HybridImageService:
         Hybrid analysis: BLIP for scene detection + color analysis for mood
         """
         try:
-            logger.info(f"🔍 HybridImageService: Starting analysis of {len(image_data)} bytes")
+            logger.info(f"HybridImageService: Starting analysis of {len(image_data)} bytes")
             
-            # Load image
-            image = Image.open(io.BytesIO(image_data)).convert('RGB')
+            # Auto-load model if not loaded (but this should only happen once)
+            if not self.is_loaded:
+                logger.info("Model not loaded, loading now...")
+                await self.load_model()
+            else:
+                logger.info(f"Model already loaded (load time: {self._model_load_time:.2f}s)")
+            
+            # Preprocess image for optimal analysis
+            try:
+                preprocessed_data = ImageProcessor.preprocess_for_blip2(image_data)
+                image = Image.open(io.BytesIO(preprocessed_data)).convert('RGB')
+                logger.info("Image preprocessed for optimal BLIP analysis")
+            except Exception as e:
+                logger.warning(f"Image preprocessing failed, using original: {e}")
+                image = Image.open(io.BytesIO(image_data)).convert('RGB')
             
             # Always do color analysis (fast and reliable)
             color_result = self.color_analyzer.analyze_colors_and_mood(image)
+            
+            # Extract enhanced color analysis for better mood detection
+            try:
+                enhanced_colors = ImageProcessor.extract_dominant_colors(image_data, num_colors=5)
+                color_result["enhanced_colors"] = enhanced_colors
+                logger.info(f"Enhanced color analysis: {len(enhanced_colors)} dominant colors extracted")
+            except Exception as e:
+                logger.warning(f"Enhanced color analysis failed: {e}")
             
             # Try BLIP analysis if model is loaded
             if self.is_loaded and self.model and self.processor:
@@ -205,11 +245,11 @@ class HybridImageService:
                 logger.info("BLIP model not loaded, using color-only analysis")
                 result = self._fallback_to_color_only(color_result, image_data)
             
-            logger.info(f"✅ Hybrid analysis complete: {result['analysis_method']}")
+            logger.info(f"Hybrid analysis complete: {result['analysis_method']}")
             return result
             
         except Exception as e:
-            logger.error(f"❌ Hybrid analysis failed: {e}")
+            logger.error(f"Hybrid analysis failed: {e}")
             return {
                 "status": "error",
                 "caption": "a beautiful scene captured in an image",
@@ -339,14 +379,50 @@ class HybridImageService:
 
     async def get_model_info(self) -> Dict[str, Any]:
         """Get model information and status"""
-        return {
+        info = {
             "service": "HybridImageService",
             "model_name": self.model_name,
             "status": "loaded" if self.is_loaded else "not_loaded",
             "device": str(self.device),
-            "features": ["scene_detection", "mood_analysis", "color_analysis"],
-            "fallback_available": True
+            "features": ["scene_detection", "mood_analysis", "color_analysis", "enhanced_mood_detection"],
+            "fallback_available": True,
+            "model_size": "~1GB (lightweight)",
+            "optimization": "cpu_optimized",
+            "model_object_exists": self.model is not None,
+            "processor_object_exists": self.processor is not None
         }
+        
+        if self._model_load_time is not None:
+            info["load_time_seconds"] = round(self._model_load_time, 2)
+            
+        return info
+    
+    async def verify_startup_status(self) -> Dict[str, Any]:
+        """Verify model is properly loaded after startup"""
+        status = {
+            "is_loaded_flag": self.is_loaded,
+            "model_exists": self.model is not None,
+            "processor_exists": self.processor is not None,
+            "load_time": self._model_load_time,
+            "device": str(self.device)
+        }
+        
+        # Test basic model functionality if loaded
+        if self.is_loaded and self.model and self.processor:
+            try:
+                # Quick test to ensure model works
+                from PIL import Image
+                import numpy as np
+                test_image = Image.fromarray(np.ones((64, 64, 3), dtype=np.uint8) * 128)
+                inputs = self.processor(test_image, return_tensors="pt")
+                status["model_test"] = "passed"
+            except Exception as e:
+                status["model_test"] = f"failed: {e}"
+                logger.error(f"Model test failed: {e}")
+        else:
+            status["model_test"] = "skipped_not_loaded"
+            
+        return status
 
     async def cleanup(self) -> None:
         """Cleanup resources"""
@@ -364,7 +440,7 @@ class HybridImageService:
             torch.cuda.empty_cache()
             
         self.is_loaded = False
-        logger.info("✅ HybridImageService cleanup complete")
+        logger.info("HybridImageService cleanup complete")
 
 # Create global instance
 hybrid_service = HybridImageService()

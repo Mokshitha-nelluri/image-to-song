@@ -1,15 +1,21 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:async';
 import 'package:http/http.dart' as http;
+import '../config.dart';
 import '../models/quiz_song.dart';
 import '../models/user_music_profile.dart';
 import '../models/song_recommendation.dart';
 
 class ApiService {
-  static const String baseUrl =
-      'https://image-to-song.onrender.com'; // Production URL
-  // static const String baseUrl = 'http://localhost:8000'; // Development URL
+  static String get baseUrl => AppConfig.currentApiBaseUrl;
+  static Duration get timeout => AppConfig.apiTimeout;
 
-  static const Duration timeout = Duration(seconds: 30);
+  // Create HTTP client with custom configuration
+  static http.Client _getHttpClient() {
+    final client = http.Client();
+    return client;
+  }
 
   // Health check
   Future<Map<String, dynamic>> healthCheck() async {
@@ -30,22 +36,72 @@ class ApiService {
 
   // Get quiz songs
   Future<List<QuizSong>> getQuizSongs({int limit = 20}) async {
+    final url = '$baseUrl/quiz/songs?limit=$limit';
+    print('🔍 Making request to: $url');
+
     try {
+      // Add custom headers for better compatibility
+      final headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'ImageToSongApp/1.0',
+      };
+
       final response = await http
-          .get(Uri.parse('$baseUrl/quiz/songs?limit=$limit'))
+          .get(Uri.parse(url), headers: headers)
           .timeout(timeout);
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List<dynamic> songsJson = data['quiz_songs'];
+      print('📡 Response status: ${response.statusCode}');
+      print('📡 Response headers: ${response.headers}');
 
-        return songsJson
-            .map((songJson) => QuizSong.fromJson(songJson))
-            .toList();
+      if (response.statusCode == 200) {
+        print('✅ Got successful response');
+        final responseBody = response.body;
+        print('📦 Response body length: ${responseBody.length}');
+
+        final data = json.decode(responseBody);
+        print('📊 Parsed JSON keys: ${data.keys.toList()}');
+
+        final List<dynamic> songsJson = data['quiz_songs'];
+        print('🎵 Found ${songsJson.length} songs');
+
+        // Debug: Print first song structure
+        if (songsJson.isNotEmpty) {
+          print('🔍 First song structure: ${songsJson[0].keys.toList()}');
+        }
+
+        final quizSongs = <QuizSong>[];
+        for (int i = 0; i < songsJson.length; i++) {
+          try {
+            final song = QuizSong.fromJson(songsJson[i]);
+            quizSongs.add(song);
+            print('✅ Successfully parsed song ${i + 1}: ${song.title}');
+          } catch (e) {
+            print('❌ Failed to parse song ${i + 1}: $e');
+            print('❌ Song data: ${songsJson[i]}');
+            rethrow;
+          }
+        }
+
+        return quizSongs;
       } else {
-        throw Exception('Failed to get quiz songs: ${response.statusCode}');
+        print('❌ HTTP Error: ${response.statusCode}');
+        print('❌ Response body: ${response.body}');
+        throw Exception(
+          'Failed to get quiz songs: ${response.statusCode} - ${response.body}',
+        );
       }
+    } on TimeoutException catch (e) {
+      print('⏰ Timeout error: $e');
+      throw Exception('Request timeout: Please check your internet connection');
+    } on SocketException catch (e) {
+      print('🌐 Network error: $e');
+      throw Exception('Network error: Please check your internet connection');
+    } on FormatException catch (e) {
+      print('📝 JSON parsing error: $e');
+      throw Exception('Invalid response format from server');
     } catch (e) {
+      print('❌ General exception: $e');
       throw Exception('Quiz songs error: $e');
     }
   }

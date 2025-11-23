@@ -113,11 +113,15 @@ class _HomeScreenState extends State<HomeScreen> {
       final mood = analysisResult['mood'] ?? 'neutral';
       final caption = analysisResult['caption'] ?? '';
 
+      print('🎵 Getting recommendations for mood: $mood, caption: $caption');
+
       final recommendations = await _apiService.getRecommendations(
         mood: mood,
         caption: caption,
         userProfile: _userProfile,
       );
+
+      print('✅ Got ${recommendations.length} recommendations');
 
       setState(() {
         _recommendations = recommendations;
@@ -243,7 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(
             _userProfile!.musicPersonality,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.9),
+              color: Colors.white.withValues(alpha: 0.9),
               fontSize: 14,
             ),
           ),

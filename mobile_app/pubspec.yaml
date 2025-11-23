@@ -24,8 +24,6 @@ dependencies:
   
   # Local storage for user preferences
   shared_preferences: ^2.2.2
-  hive: ^2.2.3
-  hive_flutter: ^1.1.0
   
   # Audio playback for song previews
   audioplayers: ^5.2.1
@@ -36,19 +34,13 @@ dependencies:
   # State management
   provider: ^6.1.1
   
-  # Utils
-  uuid: ^4.1.0
+  # Utils (kept minimal)
   intl: ^0.18.1
-  
-  # JSON handling
-  json_annotation: ^4.8.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-  hive_generator: ^2.0.1
-  build_runner: ^2.4.7
 
 flutter:
   uses-material-design: true

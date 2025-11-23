@@ -1,15 +1,16 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config.dart';
 import '../models/user_music_profile.dart';
 import '../models/quiz_song.dart';
 
 class ProfileService {
-  static const String _profileKey = 'user_music_profile';
-  static const String _quizCompletedKey = 'quiz_completed';
-  static const String _quizSongsKey = 'quiz_songs';
-  static const String _appVersionKey = 'app_version';
+  static const String _profileKey = AppConfig.userProfileKey;
+  static const String _quizCompletedKey = AppConfig.quizCompletedKey;
+  static const String _quizSongsKey = AppConfig.quizSongsKey;
+  static const String _appVersionKey = AppConfig.appVersionKey;
 
-  static const String currentAppVersion = '1.0.0';
+  static const String currentAppVersion = AppConfig.appVersion;
 
   // Save user music profile
   Future<void> saveProfile(UserMusicProfile profile) async {

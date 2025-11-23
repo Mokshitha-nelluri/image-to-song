@@ -133,14 +133,14 @@ class _QuizScreenState extends State<QuizScreen> with TickerProviderStateMixin {
 
     // Move to next song or finish quiz
     if (_currentIndex < _quizSongs.length - 1) {
-      setState(() {
-        _currentIndex++;
-      });
-
-      // Reset card animation
+      // Reset card animation and prepare for next song
       _cardController.reset();
 
+      // Use a small delay to ensure smooth animation
+      await Future.delayed(const Duration(milliseconds: 50));
+
       setState(() {
+        _currentIndex++;
         _isSwipeInProgress = false;
       });
     } else {
@@ -405,9 +405,12 @@ class _QuizScreenState extends State<QuizScreen> with TickerProviderStateMixin {
         Expanded(child: _buildSongCard()),
 
         // Action buttons
-        _buildActionButtons(),
+        Padding(
+          padding: const EdgeInsets.only(top: 20.0, bottom: 8.0),
+          child: _buildActionButtons(),
+        ),
 
-        const SizedBox(height: 32),
+        const SizedBox(height: 24),
       ],
     );
   }
@@ -485,10 +488,13 @@ class _QuizScreenState extends State<QuizScreen> with TickerProviderStateMixin {
     return AnimatedBuilder(
       animation: _cardAnimation,
       builder: (context, child) {
+        // Only apply animation when actually animating out
+        final animationValue = _isSwipeInProgress ? _cardAnimation.value : 0.0;
+
         return Transform.scale(
-          scale: 1.0 - (_cardAnimation.value * 0.1),
+          scale: 1.0 - (animationValue * 0.1),
           child: Opacity(
-            opacity: 1.0 - _cardAnimation.value,
+            opacity: 1.0 - animationValue,
             child: Container(
               margin: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
